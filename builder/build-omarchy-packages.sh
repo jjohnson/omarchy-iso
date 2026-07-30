@@ -191,7 +191,7 @@ build_package() {
 
   case "$dependency_mode" in
     syncdeps)
-      makepkg_flags="--syncdeps --cleanbuild --force --noconfirm --skippgpcheck"
+      makepkg_flags="--syncdeps --rmdeps --cleanbuild --force --noconfirm --skippgpcheck"
       ;;
     nodeps)
       makepkg_flags="--cleanbuild --force --noconfirm --skippgpcheck --nodeps"

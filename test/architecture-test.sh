@@ -183,6 +183,9 @@ grep -q 'ln -sfn "$package_file" "$staged_file"' \
   fail "temporary package repository stages archives beside its database"
 grep -q 'LC_ALL=C sort -z' "$ROOT/builder/build-omarchy-packages.sh" ||
   fail "build dependency fingerprints are locale independent"
+grep -q 'makepkg_flags="--syncdeps --rmdeps ' \
+  "$ROOT/builder/build-omarchy-packages.sh" ||
+  fail "transient build dependencies are removed between package builds"
 grep -q "name 'omarchy-keyring-\\*.pkg.tar.\\*'" "$ROOT/builder/build-iso.sh" ||
   fail "local keyring discovery accepts Arch Linux ARM package compression"
 pass "AArch64 build dependencies remain usable across package boundaries and retries"
