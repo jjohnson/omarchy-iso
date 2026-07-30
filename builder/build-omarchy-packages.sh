@@ -60,7 +60,11 @@ package_recipe_fingerprint() {
 
   (
     cd "$package_source"
-    find . -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | awk '{print $1}'
+    LC_ALL=C find . -type f -print0 |
+      LC_ALL=C sort -z |
+      xargs -0 sha256sum |
+      sha256sum |
+      awk '{print $1}'
   )
 }
 
