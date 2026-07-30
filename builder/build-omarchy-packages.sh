@@ -6,9 +6,10 @@ set -e
 
 offline_mirror_dir="$1"
 if [[ -z $offline_mirror_dir ]]; then
-  echo "Usage: build-omarchy-packages.sh <offline-mirror-dir>" >&2
+  echo "Usage: build-omarchy-packages.sh <offline-mirror-dir> [build-dependency-cache-dir]" >&2
   exit 1
 fi
+build_dependency_cache_dir="${2:-$offline_mirror_dir/../../build-dependencies}"
 
 if [[ ! -d /omarchy-source ]]; then
   echo "ERROR: /omarchy-source not mounted (pass --local-source or set OMARCHY_SOURCE_PATH)" >&2
@@ -21,7 +22,7 @@ fi
 
 work_dir=/tmp/omarchy-pkg-build
 rm -rf "$work_dir"
-mkdir -p "$work_dir" "$offline_mirror_dir"
+mkdir -p "$work_dir" "$offline_mirror_dir" "$build_dependency_cache_dir"
 local_runtime_archives=()
 
 if ! id builder &>/dev/null; then
@@ -52,6 +53,82 @@ package_archive_satisfies() {
   done < <(bsdtar -xOf "$package_file" .PKGINFO | grep '^provides = ' || true)
 
   return 1
+}
+
+package_recipe_fingerprint() {
+  local package_source="$1"
+
+  (
+    cd "$package_source"
+    find . -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | awk '{print $1}'
+  )
+}
+
+stage_build_repo_archives() {
+  local package_file staged_file
+  local -a staged_files=()
+
+  for package_file in "$@"; do
+    staged_file="$work_dir/$(basename "$package_file")"
+    ln -sfn "$package_file" "$staged_file"
+    staged_files+=("$staged_file")
+  done
+
+  repo-add "$work_dir/omarchy-build.db.tar.gz" "${staged_files[@]}" >/dev/null
+  ln -sfn omarchy-build.db.tar.gz "$work_dir/omarchy-build.db"
+  pacman -Sy --noconfirm >/dev/null
+}
+
+reuse_build_dependency() {
+  local package="$1"
+  local recipe_fingerprint="$2"
+  local fingerprint_file="$build_dependency_cache_dir/$package.recipe.sha256"
+  local manifest_file="$build_dependency_cache_dir/$package.archives"
+  local archive_name
+  local -a package_files=()
+
+  [[ -f $fingerprint_file && -f $manifest_file ]] || return 1
+  [[ $(< "$fingerprint_file") == "$recipe_fingerprint" ]] || return 1
+
+  while IFS= read -r archive_name; do
+    [[ -n $archive_name ]] || continue
+    [[ -f $build_dependency_cache_dir/$archive_name ]] || return 1
+    package_files+=("$build_dependency_cache_dir/$archive_name")
+  done < "$manifest_file"
+  (( ${#package_files[@]} > 0 )) || return 1
+
+  echo "Reusing cached build dependency $package"
+  stage_build_repo_archives "${package_files[@]}"
+}
+
+persist_build_dependency() {
+  local package="$1"
+  local recipe_fingerprint="$2"
+  shift 2
+  local manifest_file="$build_dependency_cache_dir/$package.archives"
+  local manifest_tmp="$manifest_file.tmp"
+  local package_file archive_name
+  local -a cached_files=()
+
+  if [[ -f $manifest_file ]]; then
+    while IFS= read -r archive_name; do
+      [[ -n $archive_name ]] || continue
+      rm -f "$build_dependency_cache_dir/$archive_name"
+    done < "$manifest_file"
+  fi
+
+  : > "$manifest_tmp"
+  for package_file in "$@"; do
+    archive_name=$(basename "$package_file")
+    cp "$package_file" "$build_dependency_cache_dir/$archive_name"
+    printf '%s\n' "$archive_name" >> "$manifest_tmp"
+    cached_files+=("$build_dependency_cache_dir/$archive_name")
+  done
+  mv "$manifest_tmp" "$manifest_file"
+  printf '%s\n' "$recipe_fingerprint" \
+    > "$build_dependency_cache_dir/$package.recipe.sha256"
+
+  stage_build_repo_archives "${cached_files[@]}"
 }
 
 copy_runtime_archives() {
@@ -85,8 +162,9 @@ build_package() {
   local package_work="$work_dir/$package"
   local package_source="$package_work/source"
   local package_destination="$package_work/packages"
-  local makepkg_flags
+  local makepkg_flags recipe_fingerprint package_file
   local -a package_files=()
+  local -a persisted_files=()
 
   echo "----------------------------------------"
   echo "Building $package for ${target:--build-only}"
@@ -100,6 +178,12 @@ build_package() {
   mkdir -p "$package_source" "$package_destination"
   cp -a "/omarchy-pkgs/pkgbuilds/$package/." "$package_source/"
   chown -R builder:builder "$package_work"
+  recipe_fingerprint=$(package_recipe_fingerprint "$package_source")
+
+  if [[ $target == "-" ]] &&
+    reuse_build_dependency "$package" "$recipe_fingerprint"; then
+    return
+  fi
 
   case "$dependency_mode" in
     syncdeps)
@@ -131,12 +215,14 @@ build_package() {
     return 1
   fi
 
-  repo-add "$work_dir/omarchy-build.db.tar.gz" "${package_files[@]}" >/dev/null
-  ln -sfn omarchy-build.db.tar.gz "$work_dir/omarchy-build.db"
-  pacman -Sy --noconfirm >/dev/null
-
-  if [[ $target != "-" ]]; then
+  if [[ $target == "-" ]]; then
+    persist_build_dependency "$package" "$recipe_fingerprint" "${package_files[@]}"
+  else
     copy_runtime_archives "$target" "${package_files[@]}"
+    for package_file in "${package_files[@]}"; do
+      persisted_files+=("$offline_mirror_dir/$(basename "$package_file")")
+    done
+    stage_build_repo_archives "${persisted_files[@]}"
   fi
 }
 

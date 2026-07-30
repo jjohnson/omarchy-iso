@@ -78,7 +78,8 @@ fi
 # Build locations
 build_cache_dir=/var/cache
 offline_mirror_dir="$build_cache_dir/airootfs/var/cache/omarchy/mirror/offline"
-mkdir -p "$build_cache_dir" "$offline_mirror_dir"
+build_dependency_cache_dir="$build_cache_dir/airootfs/var/cache/omarchy/build-dependencies"
+mkdir -p "$build_cache_dir" "$offline_mirror_dir" "$build_dependency_cache_dir"
 
 # Pre-import the omarchy signing key (so pacman trusts our [omarchy] repo
 # during the build without keyserver lookups).
@@ -87,10 +88,11 @@ pacman-key --lsign-key 40DFB630FF42BCFFB047046CF0134EE680CAC571
 
 # omarchy-keyring is needed inside the offline mirror too.
 if [[ $OMARCHY_ARCH == "aarch64" && -d /omarchy-source && -d /omarchy-pkgs ]]; then
-  bash /builder/build-omarchy-packages.sh "$offline_mirror_dir"
+  bash /builder/build-omarchy-packages.sh \
+    "$offline_mirror_dir" "$build_dependency_cache_dir"
   LOCAL_OMARCHY_BUILD=1
   omarchy_keyring_package=$(find "$offline_mirror_dir" -maxdepth 1 -type f \
-    -name 'omarchy-keyring-*.pkg.tar.zst' | sort | tail -1)
+    -name 'omarchy-keyring-*.pkg.tar.*' ! -name '*.sig' | sort | tail -1)
   if [[ -z $omarchy_keyring_package ]]; then
     echo "ERROR: local omarchy-keyring package was not built" >&2
     exit 1
@@ -184,7 +186,8 @@ fi
 # trees and drop them in the offline mirror. Otherwise pacman -Syw below
 # downloads the published versions from the omarchy network mirror.
 if [[ -d /omarchy-source && -d /omarchy-pkgs && -z ${LOCAL_OMARCHY_BUILD:-} ]]; then
-  bash /builder/build-omarchy-packages.sh "$offline_mirror_dir"
+  bash /builder/build-omarchy-packages.sh \
+    "$offline_mirror_dir" "$build_dependency_cache_dir"
   LOCAL_OMARCHY_BUILD=1
 fi
 

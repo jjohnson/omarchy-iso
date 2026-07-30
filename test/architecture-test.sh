@@ -174,3 +174,13 @@ grep -q -- '--packages-only' "$ROOT/bin/omarchy-iso-make" ||
 grep -q 'OMARCHY_PACKAGES_ONLY' "$ROOT/builder/build-iso.sh" ||
   fail "package-only closure mode stops before mkarchiso"
 pass "package-only closure mode is wired through the ISO builder"
+
+grep -Fq 'build_dependency_cache_dir="$build_cache_dir/airootfs/var/cache/omarchy/build-dependencies"' \
+  "$ROOT/builder/build-iso.sh" ||
+  fail "build-only package archives persist across container retries"
+grep -q 'ln -sfn "$package_file" "$staged_file"' \
+  "$ROOT/builder/build-omarchy-packages.sh" ||
+  fail "temporary package repository stages archives beside its database"
+grep -q "name 'omarchy-keyring-\\*.pkg.tar.\\*'" "$ROOT/builder/build-iso.sh" ||
+  fail "local keyring discovery accepts Arch Linux ARM package compression"
+pass "AArch64 build dependencies remain usable across package boundaries and retries"
