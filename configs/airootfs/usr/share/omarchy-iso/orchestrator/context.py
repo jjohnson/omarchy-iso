@@ -10,6 +10,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .architecture import limine_efi_names
+
 
 @dataclass
 class InstallContext:
@@ -90,13 +92,14 @@ class InstallContext:
 def _default_omarchy_install(user_configuration: dict) -> dict[str, Any]:
     disk_config = user_configuration.get("disk_config", {})
     mode = "protected" if disk_config.get("config_type") == "pre_mounted_config" else "full_disk"
+    _, limine_target = limine_efi_names()
     return {
         "mode": mode,
         "target_mount": disk_config.get("mountpoint") or "/mnt",
         "boot": {
             "esp_mount": "/boot",
             "esp_path": "/EFI/limine",
-            "efi_binary": "limine_x64.efi",
+            "efi_binary": limine_target,
             "enable_fallback": mode == "full_disk",
         },
         "storage": {},

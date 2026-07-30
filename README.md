@@ -10,10 +10,15 @@ See the ISO link on [omarchy.org](https://omarchy.org).
 
 Run `./bin/omarchy-iso-make`; output goes into `./release`. By default the ISO uses the Omarchy packages and tracks the `quattro` branch, from the stable mirror. Pass `--edge` to use `omarchy-dev` and `omarchy-settings-dev` from the edge mirror.
 
+The default architecture is `x86_64`. Pass `--arch aarch64` for the generic
+UEFI ARM64 profile. ARM64 builds currently require local or published
+AArch64 Omarchy packages; the official Arch base comes from Arch Linux ARM.
+
 For local development, build the ISO from sibling checkouts:
 
 ```bash
-./bin/omarchy-iso-make --local-source ../omarchy-installer ../omarchy-pkgs
+./bin/omarchy-iso-make --local-source ../omarchy ../omarchy-pkgs
+./bin/omarchy-iso-make --arch aarch64 --local-source ../omarchy ../omarchy-pkgs
 ```
 
 Despite the local folder name, the first argument is the Omarchy source checkout (runtime commands, configs, setup scripts, themes, shell, migrations). The installer itself lives in this ISO repo.

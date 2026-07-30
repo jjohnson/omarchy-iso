@@ -1,0 +1,21 @@
+#!/bin/bash
+
+set -e
+
+source_image=/boot/Image
+staged_image=/boot/vmlinuz-linux-aarch64
+preset_source=/usr/share/omarchy-iso/linux-aarch64.preset
+preset_target=/etc/mkinitcpio.d/linux-aarch64.preset
+
+if [[ ! -f $source_image ]]; then
+  echo "Error: linux-aarch64 did not install $source_image" >&2
+  exit 1
+fi
+
+install -Dm644 "$source_image" "$staged_image"
+install -Dm644 "$preset_source" "$preset_target"
+mkinitcpio -p linux-aarch64
+
+# The Arch Linux ARM package preset creates these normal host images before
+# this later hook replaces it with the archiso preset.
+rm -f /boot/initramfs-linux.img /boot/initramfs-linux-fallback.img

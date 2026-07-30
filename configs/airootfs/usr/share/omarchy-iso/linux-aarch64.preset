@@ -1,0 +1,13 @@
+# mkinitcpio preset for the Arch Linux ARM live kernel.
+#
+# linux-aarch64 installs its UEFI-stub kernel as /boot/Image instead of the
+# /usr/lib/modules/<kver>/vmlinuz layout expected by archiso. The profile's
+# post-transaction hook stages that Image under archiso's vmlinuz-* convention
+# before this preset builds the live initramfs.
+
+PRESETS=('archiso')
+
+ALL_kver='/boot/vmlinuz-linux-aarch64'
+archiso_config='/etc/mkinitcpio.conf.d/archiso.conf'
+
+archiso_image='/boot/initramfs-linux-aarch64.img'

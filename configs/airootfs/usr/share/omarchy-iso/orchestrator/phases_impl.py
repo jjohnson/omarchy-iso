@@ -30,6 +30,7 @@ import time
 from pathlib import Path
 
 from . import archinstall_adapter as arch
+from .architecture import limine_efi_names
 from .context import InstallContext
 from .ui import info
 
@@ -351,6 +352,7 @@ def _install_limine_omarchy(ctx: InstallContext, installer, config) -> None:
 def _install_pre_mounted_limine(ctx: InstallContext) -> None:
     boot = _boot_intent(ctx)
     storage = _storage_intent(ctx)
+    _, default_efi_binary = limine_efi_names()
     esp_device = storage.get("esp_device")
     if not esp_device:
         raise RuntimeError("omarchy_install.storage.esp_device missing")
@@ -364,7 +366,7 @@ def _install_pre_mounted_limine(ctx: InstallContext) -> None:
         disk=Path(disk),
         part=part,
         esp_path=boot.get("esp_path", "/EFI/limine"),
-        efi_binary=boot.get("efi_binary", "limine_x64.efi"),
+        efi_binary=boot.get("efi_binary", default_efi_binary),
         pre_state=pre_state,
     )
 
@@ -382,15 +384,16 @@ def _install_limine_efi(
     part: int,
     removable: bool = False,
     esp_path: str = "/EFI/limine",
-    efi_binary: str = "limine_x64.efi",
+    efi_binary: str | None = None,
     pre_state: dict | None = None,
 ) -> None:
+    source_name, default_efi_binary = limine_efi_names()
+    efi_binary = efi_binary or default_efi_binary
     if removable:
         esp_path = "/EFI/BOOT"
-        efi_binary = "BOOTX64.EFI"
+        efi_binary = source_name
 
     limine_path = ctx.target / "usr" / "share" / "limine"
-    source_name = "BOOTX64.EFI"
     target_dir = Path(esp_mount) / esp_path.lstrip("/")
     target_path = target_dir / efi_binary
     _copy_required(limine_path / source_name, ctx.target / target_path.relative_to("/"))
@@ -724,9 +727,10 @@ def _runtime_package_list(ctx: InstallContext) -> list[str]:
 
 def _boot_intent(ctx: InstallContext) -> dict:
     boot = dict(ctx.omarchy_install.get("boot") or {})
+    _, default_efi_binary = limine_efi_names()
     boot.setdefault("esp_mount", "/boot")
     boot.setdefault("esp_path", "/EFI/limine")
-    boot.setdefault("efi_binary", "limine_x64.efi")
+    boot.setdefault("efi_binary", default_efi_binary)
     boot.setdefault("enable_fallback", not ctx.is_protected)
     return boot
 
@@ -1319,7 +1323,8 @@ def validate_boot(ctx: InstallContext) -> None:
     kernel = storage.get("kernel") or (ctx.user_configuration.get("kernels") or ["linux"])[0]
 
     if arch.has_uefi():
-        limine_binary = esp_mount / boot.get("esp_path", "/EFI/limine").lstrip("/") / boot.get("efi_binary", "limine_x64.efi")
+        _, default_efi_binary = limine_efi_names()
+        limine_binary = esp_mount / boot.get("esp_path", "/EFI/limine").lstrip("/") / boot.get("efi_binary", default_efi_binary)
         if not limine_binary.exists() or limine_binary.stat().st_size == 0:
             raise RuntimeError(f"{limine_binary} missing or empty")
 

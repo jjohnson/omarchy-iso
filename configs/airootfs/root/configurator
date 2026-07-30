@@ -329,11 +329,59 @@ to_gb() {
 
 # T2 Macs need their own kernel for keyboard/wifi drivers.
 detect_kernel() {
-  if lspci -nn 2>/dev/null | grep -q "106b:180[12]"; then
-    echo "linux-t2"
-  else
-    echo "linux"
-  fi
+  case "${OMARCHY_ARCH:-$(uname -m)}" in
+    aarch64|arm64)
+      echo "linux-aarch64"
+      ;;
+    x86_64)
+      if lspci -nn 2>/dev/null | grep -q "106b:180[12]"; then
+        echo "linux-t2"
+      else
+        echo "linux"
+      fi
+      ;;
+    *)
+      echo "Error: unsupported installation architecture $(uname -m)" >&2
+      return 1
+      ;;
+  esac
+}
+
+detect_limine_efi_binary() {
+  case "${OMARCHY_ARCH:-$(uname -m)}" in
+    aarch64|arm64)
+      echo "limine_aa64.efi"
+      ;;
+    x86_64)
+      echo "limine_x64.efi"
+      ;;
+    *)
+      echo "Error: unsupported Limine EFI architecture $(uname -m)" >&2
+      return 1
+      ;;
+  esac
+}
+
+archinstall_mirror_servers() {
+  case "${OMARCHY_ARCH:-$(uname -m)}" in
+    aarch64|arm64)
+      cat <<'EOF'
+            {"url": "https://ca.us.mirror.archlinuxarm.org/$arch/$repo"},
+            {"url": "https://de3.mirror.archlinuxarm.org/$arch/$repo"}
+EOF
+      ;;
+    x86_64)
+      cat <<'EOF'
+            {"url": "https://mirror.omarchy.org/$repo/os/$arch"},
+            {"url": "https://mirror.rackspace.com/archlinux/$repo/os/$arch"},
+            {"url": "https://geo.mirror.pkgbuild.com/$repo/os/$arch"}
+EOF
+      ;;
+    *)
+      echo "Error: unsupported mirror architecture $(uname -m)" >&2
+      return 1
+      ;;
+  esac
 }
 
 # Give udev a moment to create a device node after partitioning.
@@ -662,7 +710,7 @@ run_partition_install() {
         "boot": {
             "esp_mount": "$esp_mount_in_target",
             "esp_path": "/EFI/limine",
-            "efi_binary": "limine_x64.efi",
+            "efi_binary": "$(detect_limine_efi_binary)",
             "enable_fallback": false
         },
         "storage": {
@@ -694,9 +742,7 @@ run_partition_install() {
     "mirror_config": {
         "custom_repositories": [],
         "custom_servers": [
-            {"url": "https://mirror.omarchy.org/\$repo/os/\$arch"},
-            {"url": "https://mirror.rackspace.com/archlinux/\$repo/os/\$arch"},
-            {"url": "https://geo.mirror.pkgbuild.com/\$repo/os/\$arch"}
+$(archinstall_mirror_servers)
         ],
         "mirror_regions": {},
         "optional_repositories": []
@@ -931,7 +977,7 @@ cat <<-_EOF_ >user_configuration.json
         "boot": {
             "esp_mount": "/boot",
             "esp_path": "/EFI/limine",
-            "efi_binary": "limine_x64.efi",
+            "efi_binary": "$(detect_limine_efi_binary)",
             "enable_fallback": true
         },
         "storage": {
@@ -1013,9 +1059,7 @@ cat <<-_EOF_ >user_configuration.json
     "mirror_config": {
         "custom_repositories": [],
         "custom_servers": [
-            {"url": "https://mirror.omarchy.org/\$repo/os/\$arch"},
-            {"url": "https://mirror.rackspace.com/archlinux/\$repo/os/\$arch"},
-            {"url": "https://geo.mirror.pkgbuild.com/\$repo/os/\$arch"}
+$(archinstall_mirror_servers)
         ],
         "mirror_regions": {},
         "optional_repositories": []

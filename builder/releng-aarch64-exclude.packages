@@ -1,0 +1,11 @@
+# Packages from Arch's x86_64 releng profile with no useful ARM64 equivalent.
+broadcom-wl
+edk2-shell
+hyperv
+memtest86+
+memtest86+-efi
+open-vm-tools
+refind
+reflector
+syslinux
+virtualbox-guest-utils-nox

@@ -37,6 +37,7 @@ pacman -Sy --noconfirm
 : "${OMARCHY_NVIM_PACKAGE:=omarchy-nvim}"
 
 packages=(
+  omarchy-keyring
   "$OMARCHY_SETTINGS_PACKAGE"
   "$OMARCHY_RUNTIME_PACKAGE"
   "$OMARCHY_NVIM_PACKAGE"

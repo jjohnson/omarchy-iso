@@ -6,7 +6,29 @@ omarchy-iso currently produces a single x86_64 Arch Linux live ISO. The build is
 
 Target: a parallel **generic UEFI aarch64** ISO — boots on Ampere servers, AWS Graviton VMs, Snapdragon X laptops, ARM dev kits. Anything that exposes vanilla UEFI + ACPI. Apple Silicon (Asahi) and SBCs (U-Boot/rpi-firmware) are out of scope.
 
-**Assumption:** cross-repo dependencies are someone else's problem to land first. This plan only covers omarchy-iso. The hard prerequisites are listed up front so it's clear what blocks the first green build.
+This plan centers on `omarchy-iso`; required target-runtime changes are tracked
+in the sibling Omarchy source so the first green build does not depend on
+implicit x86_64 behavior.
+
+## Validated UTM baseline (2026-07-30)
+
+The source assumptions were checked against a working generic UEFI AArch64
+Archboot installation in UTM on an Apple M4 Pro:
+
+- Arch Linux ARM maps `linux` to `linux-aarch64` and `linux-headers` to
+  `linux-aarch64-headers`; both packages advertise the generic names through
+  `provides`.
+- `linux-aarch64` installs `/boot/Image`, not
+  `/usr/lib/modules/<kver>/vmlinuz`. The pinned archiso source only copies
+  `/boot/vmlinuz-*`, so the ARM profile must stage the Image under that naming
+  convention and rebuild an archiso initramfs.
+- The Arch Linux ARM repositories do not publish an `archiso` package. The
+  pinned archiso v87 source supports `aarch64`, `arm64-efi`, and `BOOTAA64.EFI`
+  and can run directly when its documented dependencies are installed.
+- Arch Linux ARM's AArch64 `grub` package includes the `arm64-efi` target.
+  The AArch64 `limine` package includes `/usr/share/limine/BOOTAA64.EFI`.
+- `pkgs.omarchy.org/edge/aarch64` and the Omarchy ARM mirror still return 404.
+  That remains the blocker to a complete fresh-image package closure.
 
 ---
 
@@ -17,7 +39,10 @@ These exist outside omarchy-iso. Flagged for visibility — without them, nothin
 1. **aarch64 base packages must exist somewhere we can pacman from.** Vanilla Arch (`geo.mirror.pkgbuild.com`) is x86_64-only — there is no `core/os/aarch64`. The realistic source is **Arch Linux ARM** (`mirror.archlinuxarm.org`) for `core`/`extra`/`alarm`/`aur`. Decision required: target Arch Linux ARM as the aarch64 base distribution.
 2. **`pkgs.omarchy.org/{stable,edge}/aarch64/`** must serve a real repo. Probed today, both return 404. omarchy-pkgs already has multi-arch build support per its README, so this is a publish step, not a port.
 3. **Omarchy ISO architecture guard** must allow supported architectures or scope any x86_64-only checks behind an explicit guard.
-4. **archinstall + Limine** must work end-to-end on aarch64. archinstall supports it; Limine supports aarch64 UEFI. Worth a manual verification before committing to this bootloader path on ARM.
+4. **archinstall + Limine** must work end-to-end on aarch64. Their packages and
+   EFI payloads are present and the target installer now selects
+   `BOOTAA64.EFI`; a fresh-image install remains to be verified after the
+   package closure exists.
 
 ---
 
@@ -37,8 +62,10 @@ Output artifact naming already uses no arch suffix until release-time renaming, 
 - Pass `OMARCHY_ARCH` env var into the container.
 - Switch the docker image / platform per arch:
   - x86_64: `archlinux/archlinux:latest` (unchanged)
-  - aarch64: `archlinuxarm/archlinuxarm:latest` (or `menci/archlinuxarm` — pick whichever publishes a recent multi-arch image), with `--platform linux/arm64`. Native arm64 host preferred; QEMU emulation works but is slow.
-- Don't change pacman cache mount on the host: pacman keeps per-arch subdirs, so the cache is safe to share.
+  - aarch64: `menci/archlinuxarm:latest`, with `--platform linux/arm64`.
+    Native arm64 hosts are preferred.
+- Keep the offline package cache architecture-specific so an x86_64 package
+  snapshot can never enter an AArch64 mirror.
 
 ### 2. Profile — `configs/profiledef.sh`
 
@@ -53,7 +80,7 @@ Change `arch` and the squashfs BCJ filter at runtime. Either:
 - **Line 56–57**: Node.js URL grep. Branch on `OMARCHY_ARCH`:
   - `x86_64` → `linux-x64.tar.gz`
   - `aarch64` → `linux-arm64.tar.gz`
-- **Line 73**: package additions. Drop `linux-t2` for aarch64 (T2-only x86 kernel) — use plain `linux`. Write to `packages.${OMARCHY_ARCH}` instead of hardcoded `packages.x86_64`.
+- **Line 73**: package additions. Drop `linux-t2` for aarch64 (T2-only x86 kernel) — use `linux-aarch64`. Write to `packages.${OMARCHY_ARCH}` instead of hardcoded `packages.x86_64`.
 - **Line 77**: read same `packages.${OMARCHY_ARCH}` for offline mirror enumeration.
 - **archiso releng overlay** (`cp -r /archiso/configs/releng/*`): the upstream `releng` profile ships only `packages.x86_64`. For aarch64, copy `packages.x86_64` to `packages.aarch64` and prune obviously x86-only entries (`memtest86+`, `intel-ucode`, `amd-ucode`, `edk2-shell` x64 binary, `syslinux`). Land this as a small fixup step in `build-iso.sh` rather than a full fork of `releng`.
 
@@ -76,9 +103,14 @@ aarch64 has no BIOS — only UEFI. Drop the syslinux path entirely on ARM.
 
 The cleanest cut: keep one `grub.cfg` shared, strip the x86 shell/memtest fragments at build time when `OMARCHY_ARCH=aarch64`. Don't fork the file.
 
-### 6. mkinitcpio preset — `configs/airootfs/etc/mkinitcpio.d/linux-t2.preset`
+### 6. mkinitcpio preset and kernel staging
 
-Names `vmlinuz-linux-t2` and `initramfs-linux-t2.img`. The filename is the pkgbase and the alpm hook keys off it, so aarch64 does not rename this file — it simply does not ship it, and releng's own `linux.preset` covers the stock kernel. Drop `linux-t2` from `arch_packages` on aarch64 and the boot entries point at `vmlinuz-linux` / `initramfs-linux.img`.
+The AArch64 profile omits `linux-t2.preset`. A profile-local pacman hook runs
+after `linux-aarch64` is installed, copies `/boot/Image` to
+`/boot/vmlinuz-linux-aarch64`, replaces the package's normal-host preset with
+an archiso preset, and creates `/boot/initramfs-linux-aarch64.img`. This leaves
+the pinned archiso source unchanged while satisfying its `vmlinuz-*` staging
+contract.
 
 ### 7. Configurator — `configs/airootfs/root/configurator`
 
@@ -90,9 +122,10 @@ else
   kernel_choice="linux"
 fi
 ```
-T2 detection is harmless on aarch64 (`lspci` returns no match), so `kernel_choice` falls through to `linux`. **No change strictly required**, but clearer to wrap the lspci probe in `[[ $(uname -m) == "x86_64" ]]` so the intent reads correctly. Cheap.
+T2 detection is x86_64-only. AArch64 selects `linux-aarch64` directly.
 
-The archinstall JSON's `mirror_config.custom_servers` (lines 422–424) points at `mirror.omarchy.org`, `mirror.rackspace.com/archlinux`, `geo.mirror.pkgbuild.com` — none of these serve aarch64. For aarch64 the list must be `mirror.archlinuxarm.org` and friends. Branch the JSON template on `OMARCHY_ARCH` (or `uname -m` at runtime, since this file runs on the live ISO).
+The archinstall JSON's x86 mirrors do not serve aarch64. AArch64 uses direct
+Arch Linux ARM mirrors with valid TLS certificates.
 
 ### 8. pacman configs — `configs/pacman-online-{stable,rc,edge,offline}.conf`
 
@@ -145,7 +178,9 @@ Code:
 - `configs/efiboot/loader/loader.conf` — per-arch default entry
 - `configs/efiboot/loader/entries/01-archiso-x86_64-linux.conf` — generate aarch64 sibling at build time
 - `configs/grub/grub.cfg`, `loopback.cfg` — strip x86-only fragments on aarch64
-- `configs/airootfs/etc/mkinitcpio.d/linux-t2.preset` — omit on aarch64 (drop linux-t2 there; releng's linux.preset covers the stock kernel)
+- `configs/airootfs/etc/mkinitcpio.d/linux-t2.preset` — omit on aarch64
+- `configs/airootfs/etc/pacman.d/hooks/99-omarchy-iso-arm64-kernel.hook` — stage `/boot/Image` for archiso
+- `configs/airootfs/usr/share/omarchy-iso/linux-aarch64.preset` — build the ARM live initramfs
 - `configs/airootfs/root/configurator` — branch archinstall JSON mirror list on `uname -m`; optionally guard lspci T2 probe
 - `.github/workflows/nightly-build.yml` — matrix x86_64/aarch64
 
@@ -173,6 +208,9 @@ No new files unless we go the dual-list route on archinstall.packages or efiboot
 
 ## Open risks (call out before implementation)
 
-1. **mkarchiso on aarch64 is less-trodden ground.** It accepts `arch="aarch64"`, but the upstream Arch project doesn't dogfood it. Expect to file/patch around small bugs in archiso's helper scripts. Keep the archiso submodule pin tight so a regression doesn't surprise nightly.
+1. **mkarchiso on aarch64 is less-trodden ground.** The pinned source supports
+   the architecture, but the Arch Linux ARM kernel layout requires the
+   profile-local staging hook described above. Keep the archiso submodule pin
+   tight so a regression does not surprise nightly.
 2. **Limine + LUKS + Btrfs + Snapper on aarch64** — every one of these works individually on ARM, but the combination is what omarchy ships. Worth one manual end-to-end pass before declaring done.
 3. **Apple T2 / linux-t2 / `arch-mact2` repo** are silently dropped on aarch64; users mistakenly trying to install the aarch64 ISO on a T2 Mac will get an obviously-wrong result. The configurator could refuse to install when arch mismatch is detected, but that's outside this plan.

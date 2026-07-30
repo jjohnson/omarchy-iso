@@ -1,0 +1,10 @@
+[Trigger]
+Type = Package
+Operation = Install
+Operation = Upgrade
+Target = linux-aarch64
+
+[Action]
+Description = Staging the Arch Linux ARM kernel for archiso...
+When = PostTransaction
+Exec = /usr/local/bin/omarchy-iso-stage-arm64-kernel
