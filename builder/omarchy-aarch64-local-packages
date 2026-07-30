@@ -1,0 +1,32 @@
+# Fresh-image target        Source package base        Build dependency mode
+# "-" marks a build-only package that must not be copied into the ISO mirror.
+-                           gradle                     syncdeps
+omarchy-keyring             omarchy-keyring            nodeps
+dotnet-runtime              dotnet-sdk-bin             syncdeps
+aether                      aether                     syncdeps
+asdcontrol                  asdcontrol                 syncdeps
+cliamp                      cliamp                     syncdeps
+hyprland-preview-share-picker hyprland-preview-share-picker syncdeps
+limine-mkinitcpio-hook      limine-mkinitcpio-hook     syncdeps
+limine-snapper-sync         limine-snapper-sync        syncdeps
+localsend                   localsend                  syncdeps
+mise                        mise-bin                   syncdeps
+obs-studio                  obs-studio                 syncdeps
+obsidian                    obsidian-appimage          syncdeps
+omacut                      omacut                     syncdeps
+omarchy-nvim                omarchy-nvim               nodeps
+omarchy-settings-dev        omarchy-settings-dev       nodeps
+omawrite                    omawrite                   syncdeps
+pinta                       pinta                      syncdeps
+python-terminaltexteffects  python-terminaltexteffects syncdeps
+quickshell-git              quickshell-git             syncdeps
+tensaku                     tensaku                    syncdeps
+tobi-try                    tobi-try                   syncdeps
+ttf-ia-writer               ttf-ia-writer              syncdeps
+ttf-jetbrains-mono-nerd-basic ttf-jetbrains-mono-nerd-basic syncdeps
+tzupdate                    tzupdate                   syncdeps
+ufw-docker                  ufw-docker                 syncdeps
+xdg-terminal-exec           xdg-terminal-exec          syncdeps
+yaru-icon-theme             yaru-icon-theme            syncdeps
+yay                         yay                        syncdeps
+omarchy-dev                 omarchy-dev                nodeps

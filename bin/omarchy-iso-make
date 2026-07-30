@@ -3,6 +3,7 @@
 set -e
 
 NO_CACHE=""
+PACKAGES_ONLY=""
 LOCAL_OMARCHY_PATH=""
 LOCAL_PKGS_PATH=""
 OMARCHY_ARCH=x86_64
@@ -21,6 +22,11 @@ while [[ $# -gt 0 ]]; do
     shift
     ;;
   --no-boot-offer)
+    NO_BOOT_OFFER=1
+    shift
+    ;;
+  --packages-only)
+    PACKAGES_ONLY=1
     NO_BOOT_OFFER=1
     shift
     ;;
@@ -61,7 +67,7 @@ while [[ $# -gt 0 ]]; do
     ;;
   *)
     echo "Unknown option: $1"
-    echo "Usage: $0 [--arch x86_64|aarch64] [--no-cache] [--no-boot-offer] [--debug] [--edge] [--dev|--rc] [--local-source <omarchy-checkout> <pkgs-checkout>]"
+    echo "Usage: $0 [--arch x86_64|aarch64] [--no-cache] [--no-boot-offer] [--packages-only] [--debug] [--edge] [--dev|--rc] [--local-source <omarchy-checkout> <pkgs-checkout>]"
     exit 1
     ;;
   esac
@@ -85,7 +91,13 @@ lint_file_permissions() {
 
   while IFS= read -r path; do
     [[ -n $path ]] && declared["$path"]=1
-  done < <(grep -oP '^\s*\["\K[^"]+(?="\])' "$profiledef" || true)
+  done < <(
+    OMARCHY_ARCH="$OMARCHY_ARCH" /bin/bash -c '
+      declare -A file_permissions
+      source "$1"
+      printf "%s\n" "${!file_permissions[@]}"
+    ' _ "$profiledef"
+  )
 
   while IFS= read -r f; do
     [[ -f $f ]] || continue
@@ -113,7 +125,9 @@ lint_file_permissions() {
 
 lint_file_permissions
 
-sudo rm -rf /var/cache/pacman/pkg/*
+if [[ -z $PACKAGES_ONLY ]]; then
+  sudo rm -rf /var/cache/pacman/pkg/*
+fi
 git submodule update --init --recursive --jobs=8
 
 BUILD_SCRIPT="builder/build-iso.sh"
@@ -129,6 +143,7 @@ DOCKER_ARGS=(
   -e "OMARCHY_ISO_REF=$OMARCHY_ISO_REF"
   -e "OMARCHY_MIRROR=$OMARCHY_MIRROR"
   -e "OMARCHY_ARCH=$OMARCHY_ARCH"
+  -e "OMARCHY_PACKAGES_ONLY=$PACKAGES_ONLY"
   -e "OMARCHY_INSTALL_DEBUG=${OMARCHY_INSTALL_DEBUG:-}"
   -e "HOST_UID=$(id -u)"
   -e "HOST_GID=$(id -g)"
@@ -165,6 +180,10 @@ fi
 DOCKER_ARGS+=(--platform "$(omarchy_iso_docker_platform "$OMARCHY_ARCH")")
 DOCKER_IMAGE=$(omarchy_iso_docker_image "$OMARCHY_ARCH")
 docker run "${DOCKER_ARGS[@]}" "$DOCKER_IMAGE" /$BUILD_SCRIPT
+
+if [[ -n $PACKAGES_ONLY ]]; then
+  exit 0
+fi
 
 latest_iso=$(\ls -t "$BUILD_RELEASE_PATH"/*-"$OMARCHY_ARCH".iso | head -n1)
 iso_ref="${latest_iso%.*}-$OMARCHY_ISO_REF.iso"

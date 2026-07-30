@@ -69,6 +69,15 @@ profile=$(
 )
 assert_equal "$profile" "aarch64|uefi.grub" "aarch64 profile is UEFI-only"
 
+arm_kernel_stage_mode=$(
+  OMARCHY_ARCH=aarch64
+  declare -A file_permissions
+  source "$ROOT/configs/profiledef.sh"
+  printf '%s\n' "${file_permissions[/usr/local/bin/omarchy-iso-stage-arm64-kernel]:-}"
+)
+assert_equal "$arm_kernel_stage_mode" "0:0:755" \
+  "aarch64 profile declares the live-kernel staging executable"
+
 PYTHONDONTWRITEBYTECODE=1 \
   PYTHONPATH="$ROOT/configs/airootfs/usr/share/omarchy-iso" \
   python - <<'PY'
@@ -102,3 +111,66 @@ fi
 grep -q "name '\\*.pkg.tar.\\*'" "$ROOT/builder/build-iso.sh" ||
   fail "offline repository indexing discovers every package archive format"
 pass "offline repository indexing accepts xz and zstd package archives"
+
+local_package_map="$ROOT/builder/omarchy-aarch64-local-packages"
+awk '
+  /^[[:space:]]*#/ || NF == 0 { next }
+  NF != 3 { exit 1 }
+  $3 != "syncdeps" && $3 != "nodeps" { exit 1 }
+  { print $1 "\t" $2 "\t" $3 }
+' "$local_package_map" > "$test_tmp/local-package-map" ||
+  fail "AArch64 local package map rows are valid"
+pass "AArch64 local package map rows are valid"
+
+expected_local_targets=$'aether\nasdcontrol\ncliamp\ndotnet-runtime\nhyprland-preview-share-picker\nlimine-mkinitcpio-hook\nlimine-snapper-sync\nlocalsend\nmise\nobs-studio\nobsidian\nomacut\nomarchy-dev\nomarchy-keyring\nomarchy-nvim\nomarchy-settings-dev\nomawrite\npinta\npython-terminaltexteffects\nquickshell-git\ntensaku\ntobi-try\nttf-ia-writer\nttf-jetbrains-mono-nerd-basic\ntzupdate\nufw-docker\nxdg-terminal-exec\nyaru-icon-theme\nyay'
+actual_local_targets=$(
+  awk -F '\t' '$1 != "-" { print $1 }' "$test_tmp/local-package-map" | sort -u
+)
+assert_equal "$actual_local_targets" "$expected_local_targets" \
+  "AArch64 local package map covers the fresh-image repository gaps"
+
+assert_equal "$(
+  awk -F '\t' '$1 == "-" { print $2 ":" $3 }' "$test_tmp/local-package-map"
+)" "gradle:syncdeps" "Gradle remains build-only"
+assert_equal "$(
+  awk -F '\t' '$1 == "dotnet-runtime" { print $2 }' "$test_tmp/local-package-map"
+)" "dotnet-sdk-bin" "the .NET runtime target selects its ARM provider"
+assert_equal "$(
+  awk -F '\t' '$1 == "mise" { print $2 }' "$test_tmp/local-package-map"
+)" "mise-bin" "the mise target selects its ARM provider"
+assert_equal "$(
+  awk -F '\t' '$1 == "obsidian" { print $2 }' "$test_tmp/local-package-map"
+)" "obsidian-appimage" "the Obsidian target selects its ARM provider"
+
+if [[ -n ${OMARCHY_PKGS_PATH:-} ]]; then
+  while IFS=$'\t' read -r target package dependency_mode; do
+    pkgbuild_dir="$OMARCHY_PKGS_PATH/pkgbuilds/$package"
+    [[ -f $pkgbuild_dir/PKGBUILD ]] ||
+      fail "mapped package source exists for $package"
+
+    srcinfo=$(cd "$pkgbuild_dir" && makepkg --printsrcinfo)
+    if ! grep -Eq '^[[:space:]]+arch = (any|aarch64)$' <<< "$srcinfo"; then
+      fail "$package supports aarch64"
+    fi
+
+    if [[ $target != "-" ]]; then
+      if ! awk -F ' = ' -v target="$target" '
+        /^[[:space:]]*(pkgname|provides) = / {
+          value=$2
+          sub(/[<>=].*$/, "", value)
+          if (value == target) found=1
+        }
+        END { exit !found }
+      ' <<< "$srcinfo"; then
+        fail "$package satisfies $target"
+      fi
+    fi
+  done < "$test_tmp/local-package-map"
+  pass "mapped package recipes support AArch64 and satisfy their targets"
+fi
+
+grep -q -- '--packages-only' "$ROOT/bin/omarchy-iso-make" ||
+  fail "package-only closure mode is exposed by the build entrypoint"
+grep -q 'OMARCHY_PACKAGES_ONLY' "$ROOT/builder/build-iso.sh" ||
+  fail "package-only closure mode stops before mkarchiso"
+pass "package-only closure mode is wired through the ISO builder"

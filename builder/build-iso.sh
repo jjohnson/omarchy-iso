@@ -61,9 +61,16 @@ pacman --noconfirm -Sy "${keyring_packages[@]}"
 pacman --noconfirm -Syu "${build_dependencies[@]}"
 
 if [[ $OMARCHY_ARCH == "aarch64" ]]; then
-  ONLINE_PACMAN_CONF=/tmp/pacman-online-aarch64.conf
+  rendered_pacman_conf=/tmp/pacman-online-aarch64-rendered.conf
   sed "s|@OMARCHY_MIRROR@|$OMARCHY_MIRROR|g" \
-    /configs/pacman-online-aarch64.conf > "$ONLINE_PACMAN_CONF"
+    /configs/pacman-online-aarch64.conf > "$rendered_pacman_conf"
+  if [[ -d /omarchy-source && -d /omarchy-pkgs ]]; then
+    ONLINE_PACMAN_CONF=/tmp/pacman-online-aarch64-local.conf
+    awk '/^\[omarchy\]$/{exit} {print}' \
+      "$rendered_pacman_conf" > "$ONLINE_PACMAN_CONF"
+  else
+    ONLINE_PACMAN_CONF="$rendered_pacman_conf"
+  fi
 else
   ONLINE_PACMAN_CONF="/configs/pacman-online-${OMARCHY_MIRROR}.conf"
 fi
@@ -94,10 +101,10 @@ else
 fi
 pacman-key --populate omarchy
 
-# Append the [omarchy] repo to the container's /etc/pacman.conf so subsequent
-# tools (notably makepkg in build-omarchy-packages.sh) can resolve omarchy-
-# only build deps like limine-snapper-sync and limine-mkinitcpio-hook.
-if ! grep -q '^\[omarchy\]' /etc/pacman.conf; then
+# Append the published [omarchy] repo for normal builds. Local-source builds
+# use the temporary package repository created by build-omarchy-packages.sh,
+# which is also how AArch64 builds avoid the unpublished remote repository.
+if [[ -z ${LOCAL_OMARCHY_BUILD:-} ]] && ! grep -q '^\[omarchy\]' /etc/pacman.conf; then
   awk '/^\[omarchy\]/,/^$/' "$ONLINE_PACMAN_CONF" >> /etc/pacman.conf
 fi
 
@@ -179,6 +186,21 @@ fi
 if [[ -d /omarchy-source && -d /omarchy-pkgs && -z ${LOCAL_OMARCHY_BUILD:-} ]]; then
   bash /builder/build-omarchy-packages.sh "$offline_mirror_dir"
   LOCAL_OMARCHY_BUILD=1
+fi
+
+DOWNLOAD_PACMAN_CONF="$ONLINE_PACMAN_CONF"
+if [[ -n ${LOCAL_OMARCHY_BUILD:-} ]]; then
+  DOWNLOAD_PACMAN_CONF=/tmp/pacman-online-with-local.conf
+  awk -v mirror="$offline_mirror_dir" '
+    /^\[core\]$/ && !added {
+      print "[omarchy-local]"
+      print "SigLevel = Never"
+      print "Server = file://" mirror
+      print ""
+      added=1
+    }
+    { print }
+  ' "$ONLINE_PACMAN_CONF" > "$DOWNLOAD_PACMAN_CONF"
 fi
 
 # Node.js binary for offline mise install.
@@ -275,23 +297,9 @@ mapfile -t all_packages < <(
   } | sort -u
 )
 
-# With --local-source we already built these omarchy* packages directly into
-# the mirror; strip them from the pacman -Syw list so it doesn't try to fetch
-# the published versions on top.
-if [[ -n ${LOCAL_OMARCHY_BUILD:-} ]]; then
-  mapfile -t all_packages < <(
-    printf '%s\n' "${all_packages[@]}" |
-      grep -Fxv \
-        -e "$OMARCHY_RUNTIME_PACKAGE" \
-        -e "$OMARCHY_SETTINGS_PACKAGE" \
-        -e "$OMARCHY_NVIM_PACKAGE" \
-        -e omarchy-keyring || true
-  )
-fi
-
 mkdir -p /tmp/offlinedb
 download_offline_packages() {
-  pacman --config "$ONLINE_PACMAN_CONF" --noconfirm -Syw \
+  pacman --config "$DOWNLOAD_PACMAN_CONF" --noconfirm -Syw \
     "${all_packages[@]}" --cachedir "$offline_mirror_dir/" --dbpath /tmp/offlinedb --needed
 }
 
@@ -346,7 +354,10 @@ prune_stale_package_versions() {
 # which is lexical glob order, not version order (e.g. pkgrel -9 can override
 # -15). Prune to one newest version per package before indexing.
 prune_stale_package_versions "$offline_mirror_dir"
-rm -f "$offline_mirror_dir"/offline.db* "$offline_mirror_dir"/offline.files*
+rm -f "$offline_mirror_dir"/omarchy-local.db* \
+  "$offline_mirror_dir"/omarchy-local.files* \
+  "$offline_mirror_dir"/offline.db* \
+  "$offline_mirror_dir"/offline.files*
 mapfile -t offline_package_files < <(
   find "$offline_mirror_dir" -maxdepth 1 -type f \
     -name '*.pkg.tar.*' ! -name '*.sig' -print | sort
@@ -424,6 +435,11 @@ else
   printf '%s\n' "$expected_packages" \
     >"$build_cache_dir/airootfs/usr/share/omarchy-iso/expected-packages"
   echo "Target install resolves to $expected_packages packages."
+fi
+
+if [[ ${OMARCHY_PACKAGES_ONLY:-} == "1" ]]; then
+  echo "Package-only build complete; offline AArch64 closure resolves."
+  exit 0
 fi
 
 # Live ISO uses the same offline pacman.conf.

@@ -23,6 +23,15 @@ For local development, build the ISO from sibling checkouts:
 
 Despite the local folder name, the first argument is the Omarchy source checkout (runtime commands, configs, setup scripts, themes, shell, migrations). The installer itself lives in this ISO repo.
 
+To build and resolve the complete offline package mirror without running
+`mkarchiso`, add `--packages-only`. This is useful for validating local
+AArch64 package closure before the first ISO build:
+
+```bash
+./bin/omarchy-iso-make --arch aarch64 --packages-only \
+  --local-source ../omarchy ../omarchy-pkgs
+```
+
 Use `--dev` or `--rc` to build against those package channels. Both `--dev` and `--edge` select the dev packages from the edge mirror.
 
 ## Testing the ISO
