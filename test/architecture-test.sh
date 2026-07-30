@@ -82,6 +82,55 @@ profile=$(
 )
 assert_equal "$profile" "aarch64|uefi.grub" "aarch64 profile is UEFI-only"
 
+arm_squashfs_options=$(
+  OMARCHY_ARCH=aarch64
+  declare -A file_permissions
+  source "$ROOT/configs/profiledef.sh"
+  printf '%s\n' "${airootfs_image_tool_options[*]}"
+)
+assert_equal \
+  "$arm_squashfs_options" \
+  "-comp xz -b 1M -action uncompressed@subpathname(var/cache/omarchy/mirror/offline)" \
+  "aarch64 live root uses kernel-supported SquashFS compression"
+
+x86_squashfs_options=$(
+  OMARCHY_ARCH=x86_64
+  declare -A file_permissions
+  source "$ROOT/configs/profiledef.sh"
+  printf '%s\n' "${airootfs_image_tool_options[*]}"
+)
+assert_equal \
+  "$x86_squashfs_options" \
+  "-comp zstd -Xcompression-level 19 -b 1M -action uncompressed@subpathname(var/cache/omarchy/mirror/offline)" \
+  "x86_64 live root retains SquashFS zstd compression"
+
+console_map_tmp="$test_tmp/console-map"
+mkdir -p "$console_map_tmp/sysfs/fb0" "$console_map_tmp/sysfs/fb3"
+printf '%s\n' "EFI VGA" > "$console_map_tmp/sysfs/fb0/name"
+printf '%s\n' "virtio_gpudrmfb" > "$console_map_tmp/sysfs/fb3/name"
+cat > "$console_map_tmp/con2fbmap" <<'MAP'
+#!/bin/bash
+printf '%s\n' "$*" > "$OMARCHY_CONSOLE_MAP_LOG"
+MAP
+chmod +x "$console_map_tmp/con2fbmap"
+OMARCHY_GRAPHICS_SYSFS="$console_map_tmp/sysfs" \
+OMARCHY_CONSOLE_MAP_COMMAND="$console_map_tmp/con2fbmap" \
+OMARCHY_CONSOLE_MAP_LOG="$console_map_tmp/map.log" \
+  "$ROOT/configs/airootfs/usr/local/bin/omarchy-live-console-map"
+assert_equal "$(<"$console_map_tmp/map.log")" "1 3" \
+  "live console follows the VirtIO framebuffer shown by VM viewers"
+
+console_no_map_tmp="$test_tmp/console-no-map"
+mkdir -p "$console_no_map_tmp/sysfs/fb0"
+printf '%s\n' "EFI VGA" > "$console_no_map_tmp/sysfs/fb0/name"
+OMARCHY_GRAPHICS_SYSFS="$console_no_map_tmp/sysfs" \
+OMARCHY_CONSOLE_MAP_COMMAND="$console_map_tmp/con2fbmap" \
+OMARCHY_CONSOLE_MAP_LOG="$console_no_map_tmp/map.log" \
+  "$ROOT/configs/airootfs/usr/local/bin/omarchy-live-console-map"
+[[ ! -e $console_no_map_tmp/map.log ]] ||
+  fail "physical framebuffer unexpectedly triggers VM console mapping"
+pass "physical framebuffer leaves the live console mapping unchanged"
+
 arm_kernel_stage_mode=$(
   OMARCHY_ARCH=aarch64
   declare -A file_permissions
@@ -94,12 +143,35 @@ assert_equal "$arm_kernel_stage_mode" "0:0:755" \
 PYTHONDONTWRITEBYTECODE=1 \
   PYTHONPATH="$ROOT/configs/airootfs/usr/share/omarchy-iso" \
   python - <<'PY'
-from orchestrator.architecture import limine_efi_names
+from orchestrator.architecture import limine_efi_names, limine_linux_boot_assets
 
 assert limine_efi_names("x86_64") == ("BOOTX64.EFI", "limine_x64.efi")
 assert limine_efi_names("aarch64") == ("BOOTAA64.EFI", "limine_aa64.efi")
+
+config = """
+  protocol: linux
+  path: boot():/machine/linux-aarch64/Image#kernelhash
+  module_path: boot():/machine/linux-aarch64/initramfs-linux.img#initramfshash
+"""
+assert limine_linux_boot_assets(config) == {
+    "kernel_path": ["machine/linux-aarch64/Image"],
+    "module_path": ["machine/linux-aarch64/initramfs-linux.img"],
+}
 PY
-pass "Limine EFI source and destination names follow the UEFI architecture"
+pass "Limine EFI names and native ARM64 boot assets follow the UEFI architecture"
+
+grep -q 'machine() == "aarch64"' \
+  "$ROOT/configs/airootfs/usr/share/omarchy-iso/orchestrator/phases_impl.py" ||
+  fail "ARM64 installed systems use their native kernel updater"
+grep -q 'omarchy-update-kernel-arm64' \
+  "$ROOT/configs/airootfs/usr/share/omarchy-iso/orchestrator/phases_impl.py" ||
+  fail "ARM64 installed systems invoke the Omarchy kernel updater"
+pass "ARM64 installed boot finalization bypasses the x86-only UKI discovery path"
+
+grep -q 'offline_pacman=True' \
+  "$ROOT/configs/airootfs/usr/share/omarchy-iso/orchestrator/phases_impl.py" ||
+  fail "only system finalization prepares the target offline package repository"
+pass "resumed user finalization preserves the target online package configuration"
 
 grep -q "^Target = linux-aarch64$" \
   "$ROOT/configs/airootfs/etc/pacman.d/hooks/99-omarchy-iso-arm64-kernel.hook" ||

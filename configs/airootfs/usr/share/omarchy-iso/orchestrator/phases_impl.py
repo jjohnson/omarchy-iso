@@ -12,10 +12,10 @@ Phase ordering (full-disk and protected/pre-mounted):
                              useradd, runtime Omarchy packages, fstab
     configure_hibernation  → root-owned swap/resume drop-ins
     run_system_finalizer   → arch-chroot root omarchy-setup-system, including Snapper
-    finalize_limine_boot   → final Limine config/UKI build after hardware drop-ins
+    finalize_limine_boot   → final Limine boot build after hardware drop-ins
     run_chroot_finalizer   → arch-chroot -u user omarchy-finalize-user
     configure_login        → sddm state + encrypted-install autologin
-    validate_boot          → assert UKI / limine.conf / kernel cmdline are sane
+    validate_boot          → assert boot assets / limine.conf / cmdline are sane
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ import time
 from pathlib import Path
 
 from . import archinstall_adapter as arch
-from .architecture import limine_efi_names
+from .architecture import limine_efi_names, limine_linux_boot_assets, machine
 from .context import InstallContext
 from .ui import info
 
@@ -985,11 +985,13 @@ def _debug_run(ctx: InstallContext, cmd: list[str]) -> None:
 #  4. arch-chroot as user → omarchy-finalize-user --first-install
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _prepare_target_setup(ctx: InstallContext) -> None:
+def _prepare_target_setup(ctx: InstallContext, *, offline_pacman: bool) -> None:
+    if offline_pacman and not ctx.state.get("target_offline_pacman_prepared"):
+        shutil.copy("/etc/pacman.conf", str(ctx.target / "etc" / "pacman.conf"))
+        ctx.state["target_offline_pacman_prepared"] = True
+
     if ctx.state.get("target_setup_prepared"):
         return
-
-    shutil.copy("/etc/pacman.conf", str(ctx.target / "etc" / "pacman.conf"))
 
     bind_mounts = [
         ("/var/cache/omarchy/mirror/offline", "/var/cache/omarchy/mirror/offline"),
@@ -1048,8 +1050,14 @@ def _target_user_env(ctx: InstallContext, user: str) -> list[str]:
     ]
 
 
-def _run_target_setup_command(ctx: InstallContext, cmd: list[str], *, user: str | None = None) -> None:
-    _prepare_target_setup(ctx)
+def _run_target_setup_command(
+    ctx: InstallContext,
+    cmd: list[str],
+    *,
+    user: str | None = None,
+    offline_pacman: bool = False,
+) -> None:
+    _prepare_target_setup(ctx, offline_pacman=offline_pacman)
     omarchy_start_time, omarchy_start_epoch = _ensure_finalizer_log_started(ctx)
 
     target_log = ctx.target / "var" / "log" / "omarchy-install.log"
@@ -1117,6 +1125,7 @@ def run_system_finalizer(ctx: InstallContext) -> None:
         _run_target_setup_command(
             ctx,
             ["/usr/bin/omarchy-setup-system", "--install-user", ctx.username, "--first-install"],
+            offline_pacman=True,
         )
     finally:
         _unmask_mkinitcpio_pacman_hooks(ctx, ctx.target, TARGET_DEFERRED_BOOT_HOOKS)
@@ -1157,7 +1166,16 @@ def finalize_limine_boot(ctx: InstallContext) -> None:
     if not limine_conf.exists():
         raise RuntimeError(f"{limine_conf} missing")
 
-    subprocess.run(["arch-chroot", str(ctx.target), "limine-update"], check=True)
+    if machine() == "aarch64":
+        arm64_updater = ctx.target / "usr" / "bin" / "omarchy-update-kernel-arm64"
+        if not arm64_updater.exists():
+            raise RuntimeError(f"{arm64_updater} missing")
+        subprocess.run(
+            ["arch-chroot", str(ctx.target), "omarchy-update-kernel-arm64"],
+            check=True,
+        )
+    else:
+        subprocess.run(["arch-chroot", str(ctx.target), "limine-update"], check=True)
 
     subprocess.run(
         ["arch-chroot", str(ctx.target), "btrfs", "quota", "disable", "/"],
@@ -1328,14 +1346,18 @@ def validate_boot(ctx: InstallContext) -> None:
         if not limine_binary.exists() or limine_binary.stat().st_size == 0:
             raise RuntimeError(f"{limine_binary} missing or empty")
 
-        # Hardware packages (omarchy-hw-intel-ptl, …) can swap the kernel out
-        # from under us mid-install, so trust what's on disk over what we asked
-        # for and only fall back to the configured name when nothing's there.
-        uki_dir = esp_mount / "EFI" / "Linux"
-        candidates = _installed_kernels(ctx) or [kernel]
-        ukis = [uki_dir / f"{uki_prefix}_{name}.efi" for name in candidates]
-        if not any(uki.exists() and uki.stat().st_size for uki in ukis):
-            raise RuntimeError(f"{' / '.join(str(uki) for uki in ukis)} missing or empty")
+        if machine() == "aarch64":
+            _validate_arm64_limine_entry(ctx, esp_mount, limine_conf_text)
+        else:
+            # Hardware packages (omarchy-hw-intel-ptl, …) can swap the kernel
+            # out from under us mid-install, so trust what's on disk over what
+            # we asked for and only fall back to the configured name when
+            # nothing's there.
+            uki_dir = esp_mount / "EFI" / "Linux"
+            candidates = _installed_kernels(ctx) or [kernel]
+            ukis = [uki_dir / f"{uki_prefix}_{name}.efi" for name in candidates]
+            if not any(uki.exists() and uki.stat().st_size for uki in ukis):
+                raise RuntimeError(f"{' / '.join(str(uki) for uki in ukis)} missing or empty")
 
         post = _read_efibootmgr()
         if not _find_label_entries(post["entries"], "Limine"):
@@ -1345,8 +1367,29 @@ def validate_boot(ctx: InstallContext) -> None:
         _validate_pre_mounted_filesystems(ctx)
 
 
+def _validate_arm64_limine_entry(
+    ctx: InstallContext,
+    esp_mount: Path,
+    limine_conf_text: str,
+) -> None:
+    assets = limine_linux_boot_assets(limine_conf_text)
+    for key in ("kernel_path", "module_path"):
+        paths = assets.get(key, [])
+        if not paths:
+            raise RuntimeError(f"ARM64 Limine entry has no {key}")
+        if not any((esp_mount / path).is_file() and (esp_mount / path).stat().st_size for path in paths):
+            locations = " / ".join(str(esp_mount / path) for path in paths)
+            raise RuntimeError(f"{locations} missing or empty")
+
+    hook = ctx.target / "etc" / "pacman.d" / "hooks" / "99-omarchy-arm64-kernel.hook"
+    if not hook.is_file():
+        raise RuntimeError(f"{hook} missing — future ARM64 kernel updates would not rebuild Limine")
+    if "Exec = /usr/bin/omarchy-update-kernel-arm64" not in hook.read_text():
+        raise RuntimeError(f"{hook} does not call the ARM64 kernel updater")
+
+
 def _assert_boot_hooks_restored(ctx: InstallContext) -> None:
-    """Never hand over a system whose UKI rebuild hook is still masked.
+    """Never hand over a system whose boot-image rebuild hook is still masked.
 
     run_system_finalizer defers 90-mkinitcpio-install.hook inside the target and
     restores it in a finally, but a mask that survived would be invisible until
@@ -1366,7 +1409,7 @@ def _assert_boot_hooks_restored(ctx: InstallContext) -> None:
         # package, so the real hook is on disk before the mask ever goes up and
         # must be on disk again now.
         if not path.is_file():
-            raise RuntimeError(f"{path} is missing — future kernel updates would ship no UKI")
+            raise RuntimeError(f"{path} is missing — future kernel updates would ship no boot image")
 
 
 # Every kernel package leaves its pkgbase next to its modules, which is also

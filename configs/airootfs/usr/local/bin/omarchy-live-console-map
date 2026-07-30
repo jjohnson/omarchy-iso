@@ -1,0 +1,40 @@
+#!/bin/bash
+
+set -euo pipefail
+
+console="${1:-1}"
+graphics_dir="${OMARCHY_GRAPHICS_SYSFS:-/sys/class/graphics}"
+
+map_console() {
+  local console="$1"
+  local framebuffer="$2"
+
+  if [[ -n ${OMARCHY_CONSOLE_MAP_COMMAND:-} ]]; then
+    "$OMARCHY_CONSOLE_MAP_COMMAND" "$console" "$framebuffer"
+    return
+  fi
+
+  python - "$console" "$framebuffer" <<'PY'
+import fcntl
+import struct
+import sys
+
+FBIOPUT_CON2FBMAP = 0x4610
+with open("/dev/fb0", "rb", buffering=0) as device:
+    fcntl.ioctl(
+        device,
+        FBIOPUT_CON2FBMAP,
+        struct.pack("=II", int(sys.argv[1]), int(sys.argv[2])),
+    )
+PY
+}
+
+for fb in "$graphics_dir"/fb*; do
+  [[ -r $fb/name ]] || continue
+  [[ $(<"$fb/name") == "virtio_gpudrmfb" ]] || continue
+
+  fb_name="${fb##*/}"
+  framebuffer="${fb_name#fb}"
+  map_console "$console" "$framebuffer"
+  exit 0
+done

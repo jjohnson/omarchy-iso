@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 #
 # Live ISO entry point on tty1: set up the live VT, run the configurator
 # wizard, then hand off to the Python install orchestrator. Mirrors the
@@ -11,6 +11,11 @@
 set -euo pipefail
 
 [[ $(tty) == /dev/tty1 ]] || exit 0
+
+# UTM's virtio-ramfb display leaves tty1 on the firmware framebuffer after
+# virtio_gpu creates the scanout shown by the viewer. Move the live console to
+# that scanout before drawing the configurator.
+omarchy-live-console-map >/dev/null 2>&1 || true
 
 export OMARCHY_MIRROR="$(cat /root/omarchy_mirror)"
 if [[ -f /root/omarchy_iso_ref ]]; then
