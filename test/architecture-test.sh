@@ -186,6 +186,12 @@ grep -q 'LC_ALL=C sort -z' "$ROOT/builder/build-omarchy-packages.sh" ||
 grep -q 'makepkg_flags="--syncdeps --rmdeps ' \
   "$ROOT/builder/build-omarchy-packages.sh" ||
   fail "transient build dependencies are removed between package builds"
+grep -q 'Reusing cached runtime package' \
+  "$ROOT/builder/build-omarchy-packages.sh" ||
+  fail "completed runtime packages persist across closure retries"
+grep -q 'rm -f "/var/cache/pacman/pkg/$(basename "$package_file")"' \
+  "$ROOT/builder/build-omarchy-packages.sh" ||
+  fail "stale local archives are evicted from pacman's package cache"
 grep -q "name 'omarchy-keyring-\\*.pkg.tar.\\*'" "$ROOT/builder/build-iso.sh" ||
   fail "local keyring discovery accepts Arch Linux ARM package compression"
 pass "AArch64 build dependencies remain usable across package boundaries and retries"

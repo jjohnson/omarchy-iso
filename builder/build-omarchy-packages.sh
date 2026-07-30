@@ -62,10 +62,15 @@ package_recipe_fingerprint() {
     cd "$package_source"
     LC_ALL=C find . -type f -print0 |
       LC_ALL=C sort -z |
-      xargs -0 sha256sum |
-      sha256sum |
-      awk '{print $1}'
-  )
+      xargs -0 sha256sum
+
+    if grep -q 'OMARCHY_SRC' "$package_source/PKGBUILD"; then
+      cd /omarchy-source
+      git ls-files -co --exclude-standard -z |
+        LC_ALL=C sort -z |
+        xargs -0 sha256sum
+    fi
+  ) | sha256sum | awk '{print $1}'
 }
 
 stage_build_repo_archives() {
@@ -74,6 +79,8 @@ stage_build_repo_archives() {
 
   for package_file in "$@"; do
     staged_file="$work_dir/$(basename "$package_file")"
+    rm -f "/var/cache/pacman/pkg/$(basename "$package_file")" \
+      "/var/cache/pacman/pkg/$(basename "$package_file").sig"
     ln -sfn "$package_file" "$staged_file"
     staged_files+=("$staged_file")
   done
@@ -135,6 +142,53 @@ persist_build_dependency() {
   stage_build_repo_archives "${cached_files[@]}"
 }
 
+reuse_runtime_package() {
+  local target="$1"
+  local package="$2"
+  local recipe_fingerprint="$3"
+  local fingerprint_file="$build_dependency_cache_dir/$package.runtime.recipe.sha256"
+  local manifest_file="$build_dependency_cache_dir/$package.runtime.archives"
+  local archive_name package_file
+  local satisfied=""
+  local -a package_files=()
+
+  [[ -f $fingerprint_file && -f $manifest_file ]] || return 1
+  [[ $(< "$fingerprint_file") == "$recipe_fingerprint" ]] || return 1
+
+  while IFS= read -r archive_name; do
+    [[ -n $archive_name ]] || continue
+    package_file="$offline_mirror_dir/$archive_name"
+    [[ -f $package_file ]] || return 1
+    if package_archive_satisfies "$target" "$package_file"; then
+      satisfied=1
+    fi
+    package_files+=("$package_file")
+  done < "$manifest_file"
+  (( ${#package_files[@]} > 0 )) || return 1
+  [[ -n $satisfied ]] || return 1
+
+  echo "Reusing cached runtime package $package for $target"
+  local_runtime_archives+=("${package_files[@]}")
+  stage_build_repo_archives "${package_files[@]}"
+}
+
+persist_runtime_package_metadata() {
+  local package="$1"
+  local recipe_fingerprint="$2"
+  shift 2
+  local manifest_file="$build_dependency_cache_dir/$package.runtime.archives"
+  local manifest_tmp="$manifest_file.tmp"
+  local package_file
+
+  : > "$manifest_tmp"
+  for package_file in "$@"; do
+    basename "$package_file" >> "$manifest_tmp"
+  done
+  mv "$manifest_tmp" "$manifest_file"
+  printf '%s\n' "$recipe_fingerprint" \
+    > "$build_dependency_cache_dir/$package.runtime.recipe.sha256"
+}
+
 copy_runtime_archives() {
   local target="$1"
   shift
@@ -188,6 +242,10 @@ build_package() {
     reuse_build_dependency "$package" "$recipe_fingerprint"; then
     return
   fi
+  if [[ $target != "-" ]] &&
+    reuse_runtime_package "$target" "$package" "$recipe_fingerprint"; then
+    return
+  fi
 
   case "$dependency_mode" in
     syncdeps)
@@ -226,6 +284,8 @@ build_package() {
     for package_file in "${package_files[@]}"; do
       persisted_files+=("$offline_mirror_dir/$(basename "$package_file")")
     done
+    persist_runtime_package_metadata \
+      "$package" "$recipe_fingerprint" "${persisted_files[@]}"
     stage_build_repo_archives "${persisted_files[@]}"
   fi
 }
