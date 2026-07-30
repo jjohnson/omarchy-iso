@@ -2,7 +2,7 @@
 # Build Omarchy packages from mounted source (/omarchy-source + /omarchy-pkgs)
 # and place the resulting package archives in the offline mirror.
 
-set -e
+set -eo pipefail
 
 offline_mirror_dir="$1"
 if [[ -z $offline_mirror_dir ]]; then
@@ -66,7 +66,8 @@ package_recipe_fingerprint() {
 
     if grep -q 'OMARCHY_SRC' "$package_source/PKGBUILD"; then
       cd /omarchy-source
-      git ls-files -co --exclude-standard -z |
+      git -c safe.directory=/omarchy-source \
+        ls-files -co --exclude-standard -z |
         LC_ALL=C sort -z |
         xargs -0 sha256sum
     fi

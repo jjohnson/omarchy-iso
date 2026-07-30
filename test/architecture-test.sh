@@ -189,6 +189,9 @@ grep -q 'makepkg_flags="--syncdeps --rmdeps ' \
 grep -q 'Reusing cached runtime package' \
   "$ROOT/builder/build-omarchy-packages.sh" ||
   fail "completed runtime packages persist across closure retries"
+grep -q 'safe.directory=/omarchy-source' \
+  "$ROOT/builder/build-omarchy-packages.sh" ||
+  fail "source-backed package fingerprints trust the mounted checkout explicitly"
 grep -q 'rm -f "/var/cache/pacman/pkg/$(basename "$package_file")"' \
   "$ROOT/builder/build-omarchy-packages.sh" ||
   fail "stale local archives are evicted from pacman's package cache"
