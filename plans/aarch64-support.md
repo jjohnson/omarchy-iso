@@ -28,7 +28,50 @@ Archboot installation in UTM on an Apple M4 Pro:
 - Arch Linux ARM's AArch64 `grub` package includes the `arm64-efi` target.
   The AArch64 `limine` package includes `/usr/share/limine/BOOTAA64.EFI`.
 - `pkgs.omarchy.org/edge/aarch64` and the Omarchy ARM mirror still return 404.
-  That remains the blocker to a complete fresh-image package closure.
+  Local-source builds therefore need to construct the Omarchy package closure
+  before resolving the fresh-image mirror.
+
+## Validated local package closure (2026-07-30)
+
+The Phase 7 package-only build closed the missing published-repository gap
+without building an ISO:
+
+```bash
+./bin/omarchy-iso-make --arch aarch64 --packages-only \
+  --local-source /home/jj/Projects/omarchy-quattro-arm64 \
+  /home/jj/Projects/omarchy-pkgs-quattro-arm64
+```
+
+The fresh-image audit found 283 unique package targets. Arch Linux ARM
+resolved 254 unchanged; the local build map supplied the remaining 29 runtime
+targets from 29 package recipes. Gradle is a thirtieth, build-only recipe and
+is deliberately excluded from the runtime mirror.
+
+The completed offline repository contains 1,121 package archives and matching
+database records. Its final target transaction resolves to 928 installed
+packages. All 29 mapped runtime targets resolve, including these provider
+substitutions:
+
+| Target | Local package |
+| --- | --- |
+| `dotnet-runtime` | `dotnet-sdk-bin` |
+| `mise` | `mise-bin` |
+| `obsidian` | `obsidian-appimage` |
+
+All 37 local runtime archives are `aarch64` or `any`; the larger count comes
+from the nine split Yaru packages. Native builds include Quickshell, OBS
+Studio, LocalSend, Pinta, the Limine helpers, and the smaller Rust, Go, Qt,
+and GTK utilities.
+
+The build caches Gradle separately, removes transient build dependencies
+between recipes, fingerprints both package recipes and mounted Omarchy source,
+and reuses only matching completed artifacts. This makes long native builds
+resumable without allowing a build-only package or stale source-backed package
+into the offline mirror.
+
+The published AArch64 repository remains a release/distribution prerequisite,
+but it is no longer a blocker for a local-source green build. The first actual
+ISO build and installer boot remain untested.
 
 ---
 
@@ -37,7 +80,10 @@ Archboot installation in UTM on an Apple M4 Pro:
 These exist outside omarchy-iso. Flagged for visibility — without them, nothing here boots:
 
 1. **aarch64 base packages must exist somewhere we can pacman from.** Vanilla Arch (`geo.mirror.pkgbuild.com`) is x86_64-only — there is no `core/os/aarch64`. The realistic source is **Arch Linux ARM** (`mirror.archlinuxarm.org`) for `core`/`extra`/`alarm`/`aur`. Decision required: target Arch Linux ARM as the aarch64 base distribution.
-2. **`pkgs.omarchy.org/{stable,edge}/aarch64/`** must serve a real repo. Probed today, both return 404. omarchy-pkgs already has multi-arch build support per its README, so this is a publish step, not a port.
+2. **`pkgs.omarchy.org/{stable,edge}/aarch64/`** must serve a real repo for
+   production builds. Probed today, both return 404. Local-source builds now
+   construct and validate the complete closure, so publishing is no longer a
+   blocker for the next development ISO.
 3. **Omarchy ISO architecture guard** must allow supported architectures or scope any x86_64-only checks behind an explicit guard.
 4. **archinstall + Limine** must work end-to-end on aarch64. Their packages and
    EFI payloads are present and the target installer now selects
@@ -192,9 +238,13 @@ No new files unless we go the dual-list route on archinstall.packages or efiboot
 
 **Local (host is x86_64):**
 1. `bin/omarchy-iso-make --arch x86_64` — must produce a byte-similar ISO to today's nightly (smoke test for regressions in the refactor).
-2. `bin/omarchy-iso-make --arch aarch64` — succeeds (slow under QEMU binfmt; expect 30-60 min).
-3. `bin/omarchy-iso-boot release/omarchy-*-aarch64-*.iso` — boots to the configurator under `qemu-system-aarch64 -machine virt`. Walk through the picker, confirm archinstall lays down a working system, reboot into the installed system.
-4. Live-iso shell: `pacman -Sy && pacman -Si linux` returns an aarch64 package from `mirror.archlinuxarm.org`.
+2. `bin/omarchy-iso-make --arch aarch64 --packages-only --local-source ...`
+   — completed natively on the AArch64 UTM guest with a 928-package target
+   closure.
+3. `bin/omarchy-iso-make --arch aarch64 --local-source ...` — produce the
+   first actual AArch64 ISO from the validated package cache.
+4. `bin/omarchy-iso-boot release/omarchy-*-aarch64-*.iso` — boots to the configurator under `qemu-system-aarch64 -machine virt`. Walk through the picker, confirm archinstall lays down a working system, reboot into the installed system.
+5. Live-iso shell: `pacman -Sy && pacman -Si linux` returns an aarch64 package from `mirror.archlinuxarm.org`.
 
 **On real hardware (post green QEMU run):**
 - AWS Graviton VM (`c7g.medium`, dd ISO to a volume, attach as boot) — fastest cloud check, no hardware needed.
