@@ -1,3 +1,6 @@
+# remove from airootfs!
+# This build-only hook is deleted by releng's custom-hook cleanup.
+
 [Trigger]
 Type = Package
 Operation = Install

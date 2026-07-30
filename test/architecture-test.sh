@@ -40,6 +40,19 @@ assert_equal "$(omarchy_iso_node_architecture aarch64)" "arm64" \
 assert_equal "$(omarchy_iso_live_kernel aarch64)" "linux-aarch64" \
   "aarch64 selects the validated Arch Linux ARM kernel"
 
+cat > "$test_tmp/archiso.conf" <<'MKINITCPIO'
+# fixture
+HOOKS=(base udev microcode modconf kms memdisk archiso block filesystems)
+MKINITCPIO
+omarchy_iso_prepare_initramfs_config \
+  aarch64 \
+  "$test_tmp/archiso.conf" \
+  "$test_tmp/archiso-aarch64.conf"
+expected=$'# fixture\nHOOKS=(base udev modconf kms archiso block filesystems)'
+actual=$(< "$test_tmp/archiso-aarch64.conf")
+assert_equal "$actual" "$expected" \
+  "aarch64 live initramfs excludes x86-only microcode and memdisk hooks"
+
 cat > "$test_tmp/packages" <<'PACKAGES'
 # fixture
 amd-ucode
@@ -95,6 +108,28 @@ grep -q "^ALL_kver='/boot/vmlinuz-linux-aarch64'$" \
   "$ROOT/configs/airootfs/usr/share/omarchy-iso/linux-aarch64.preset" ||
   fail "ARM64 archiso preset uses the staged kernel path"
 pass "ARM64 live-kernel staging contract is present"
+
+cp "$ROOT/archiso/archiso/mkarchiso" "$test_tmp/mkarchiso"
+patch --silent "$test_tmp/mkarchiso" "$ROOT/builder/mkarchiso-aarch64.patch" ||
+  fail "AArch64 mkarchiso compatibility patch applies to the pinned source"
+grep -Fq 'available_grubmodules+=("$module")' "$test_tmp/mkarchiso" ||
+  fail "AArch64 mkarchiso filters unavailable GRUB modules"
+grep -Fq 'patch --silent "$MKARCHISO" /builder/mkarchiso-aarch64.patch' \
+  "$ROOT/builder/build-iso.sh" ||
+  fail "AArch64 builder applies the GRUB module compatibility patch"
+pass "AArch64 GRUB module filtering applies to the pinned Archiso source"
+
+grep -Fq 'etc/mkinitcpio.d/linux.preset' "$ROOT/builder/build-iso.sh" ||
+  fail "AArch64 profile removes releng's stock-kernel preset"
+grep -Fq '90-mkinitcpio-install.hook' "$ROOT/builder/build-iso.sh" ||
+  fail "AArch64 profile masks the normal host initramfs hook"
+grep -Fq 'rm -f /etc/pacman.d/hooks/90-mkinitcpio-install.hook' \
+  "$ROOT/configs/airootfs/usr/local/bin/omarchy-iso-stage-arm64-kernel" ||
+  fail "AArch64 kernel staging restores the live environment's package hook"
+grep -Fq '# remove from airootfs!' \
+  "$ROOT/configs/airootfs/etc/pacman.d/hooks/99-omarchy-iso-arm64-kernel.hook" ||
+  fail "AArch64 build-only kernel hook is removed from the live environment"
+pass "AArch64 package transaction builds only the Archiso initramfs"
 
 if grep -q '^\[multilib\]$' "$ROOT/configs/pacman-online-aarch64.conf"; then
   fail "aarch64 pacman config excludes multilib"

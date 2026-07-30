@@ -14,8 +14,12 @@ fi
 
 install -Dm644 "$source_image" "$staged_image"
 install -Dm644 "$preset_source" "$preset_target"
+
+# The build profile masks the stock package hook so it cannot build host-style
+# images before this Archiso preset is staged. Remove the mask from the live
+# environment before generating the one image the ISO actually boots.
+rm -f /etc/pacman.d/hooks/90-mkinitcpio-install.hook
 mkinitcpio -p linux-aarch64
 
-# The Arch Linux ARM package preset creates these normal host images before
-# this later hook replaces it with the archiso preset.
+# Keep the live /boot payload limited to Archiso's staged kernel and initramfs.
 rm -f /boot/initramfs-linux.img /boot/initramfs-linux-fallback.img

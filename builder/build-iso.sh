@@ -47,7 +47,7 @@ if [[ $OMARCHY_ARCH == "aarch64" ]]; then
     sed
     squashfs-tools
   )
-  MKARCHISO=/archiso/archiso/mkarchiso
+  MKARCHISO=/tmp/mkarchiso-aarch64
 else
   build_dependencies+=(archiso)
   MKARCHISO=mkarchiso
@@ -61,6 +61,9 @@ pacman --noconfirm -Sy "${keyring_packages[@]}"
 pacman --noconfirm -Syu "${build_dependencies[@]}"
 
 if [[ $OMARCHY_ARCH == "aarch64" ]]; then
+  install -m 755 /archiso/archiso/mkarchiso "$MKARCHISO"
+  patch --silent "$MKARCHISO" /builder/mkarchiso-aarch64.patch
+
   rendered_pacman_conf=/tmp/pacman-online-aarch64-rendered.conf
   sed "s|@OMARCHY_MIRROR@|$OMARCHY_MIRROR|g" \
     /configs/pacman-online-aarch64.conf > "$rendered_pacman_conf"
@@ -137,7 +140,15 @@ if [[ $OMARCHY_ARCH == "aarch64" ]]; then
     "$target_packages"
 
   rm -f "$build_cache_dir/packages.x86_64"
-  rm -f "$build_cache_dir/airootfs/etc/mkinitcpio.d/linux-t2.preset"
+  rm -f \
+    "$build_cache_dir/airootfs/etc/mkinitcpio.d/linux.preset" \
+    "$build_cache_dir/airootfs/etc/mkinitcpio.d/linux-t2.preset"
+  omarchy_iso_prepare_initramfs_config \
+    "$OMARCHY_ARCH" \
+    /configs/airootfs/etc/mkinitcpio.conf.d/archiso.conf \
+    "$build_cache_dir/airootfs/etc/mkinitcpio.conf.d/archiso.conf"
+  ln -sfn /dev/null \
+    "$build_cache_dir/airootfs/etc/pacman.d/hooks/90-mkinitcpio-install.hook"
   sed -i \
     -e 's/vmlinuz-linux-t2/vmlinuz-linux-aarch64/g' \
     -e 's/initramfs-linux-t2/initramfs-linux-aarch64/g' \

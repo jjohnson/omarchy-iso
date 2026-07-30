@@ -65,6 +65,39 @@ omarchy_iso_live_kernel() {
   esac
 }
 
+omarchy_iso_prepare_initramfs_config() {
+  local architecture="$1"
+  local source="$2"
+  local destination="$3"
+  local line hook
+  local -a hooks filtered_hooks
+
+  if [[ $architecture == "x86_64" ]]; then
+    cp "$source" "$destination"
+    return
+  fi
+
+  while IFS= read -r line || [[ -n $line ]]; do
+    if [[ $line =~ ^HOOKS=\((.*)\)$ ]]; then
+      read -ra hooks <<< "${BASH_REMATCH[1]}"
+      filtered_hooks=()
+      for hook in "${hooks[@]}"; do
+        case "$hook" in
+          microcode|memdisk)
+            continue
+            ;;
+          *)
+            filtered_hooks+=("$hook")
+            ;;
+        esac
+      done
+      printf 'HOOKS=(%s)\n' "${filtered_hooks[*]}"
+    else
+      printf '%s\n' "$line"
+    fi
+  done < "$source" > "$destination"
+}
+
 omarchy_iso_prepare_package_list() {
   local architecture="$1"
   local source="$2"
