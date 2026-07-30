@@ -125,9 +125,6 @@ lint_file_permissions() {
 
 lint_file_permissions
 
-if [[ -z $PACKAGES_ONLY ]]; then
-  sudo rm -rf /var/cache/pacman/pkg/*
-fi
 git submodule update --init --recursive --jobs=8
 
 BUILD_SCRIPT="builder/build-iso.sh"
@@ -161,15 +158,15 @@ if [[ -n $LOCAL_OMARCHY_PATH ]]; then
   )
 fi
 
-if [[ -d /var/cache/pacman/pkg ]]; then
-  DOCKER_ARGS+=(-v "/var/cache/pacman/pkg:/var/cache/pacman/pkg")
-fi
-
 # Mount the build cache directory where packages are downloaded. Channels use
 # different package snapshots and must never share an offline mirror cache.
 if [[ -z "$NO_CACHE" ]]; then
-  OFFLINE_REPO_BUILD_CACHE_DIR="$HOME/.cache/omarchy/iso_${OMARCHY_MIRROR}_${OMARCHY_ARCH}/airootfs/var/cache/omarchy"
+  ISO_BUILD_CACHE_DIR="$HOME/.cache/omarchy/iso_${OMARCHY_MIRROR}_${OMARCHY_ARCH}"
+  CONTAINER_PACMAN_CACHE_DIR="$ISO_BUILD_CACHE_DIR/pacman/pkg"
+  OFFLINE_REPO_BUILD_CACHE_DIR="$ISO_BUILD_CACHE_DIR/airootfs/var/cache/omarchy"
+  mkdir -p "$CONTAINER_PACMAN_CACHE_DIR"
   mkdir -p "$OFFLINE_REPO_BUILD_CACHE_DIR"
+  DOCKER_ARGS+=(-v "$CONTAINER_PACMAN_CACHE_DIR:/var/cache/pacman/pkg")
   DOCKER_ARGS+=(-v "$OFFLINE_REPO_BUILD_CACHE_DIR:/var/cache/airootfs/var/cache/omarchy")
 else
   # The locally cached :latest image is a cache too — docker run never

@@ -175,6 +175,20 @@ grep -q 'OMARCHY_PACKAGES_ONLY' "$ROOT/builder/build-iso.sh" ||
   fail "package-only closure mode stops before mkarchiso"
 pass "package-only closure mode is wired through the ISO builder"
 
+if grep -q 'sudo rm -rf /var/cache/pacman/pkg' "$ROOT/bin/omarchy-iso-make"; then
+  fail "ISO builds do not clear the host pacman cache"
+fi
+grep -q 'ISO_BUILD_CACHE_DIR="$HOME/.cache/omarchy/iso_${OMARCHY_MIRROR}_${OMARCHY_ARCH}"' \
+  "$ROOT/bin/omarchy-iso-make" ||
+  fail "ISO build cache is isolated by channel and architecture"
+grep -q 'CONTAINER_PACMAN_CACHE_DIR="$ISO_BUILD_CACHE_DIR/pacman/pkg"' \
+  "$ROOT/bin/omarchy-iso-make" ||
+  fail "container pacman cache stays under the isolated build cache"
+grep -q 'CONTAINER_PACMAN_CACHE_DIR:/var/cache/pacman/pkg' \
+  "$ROOT/bin/omarchy-iso-make" ||
+  fail "container uses the isolated pacman package cache"
+pass "ISO builds leave the host pacman cache untouched"
+
 grep -Fq 'build_dependency_cache_dir="$build_cache_dir/airootfs/var/cache/omarchy/build-dependencies"' \
   "$ROOT/builder/build-iso.sh" ||
   fail "build-only package archives persist across container retries"

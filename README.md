@@ -34,6 +34,11 @@ AArch64 package closure before the first ISO build:
 
 Use `--dev` or `--rc` to build against those package channels. Both `--dev` and `--edge` select the dev packages from the edge mirror.
 
+Build caches are stored under
+`~/.cache/omarchy/iso_<channel>_<architecture>/`. The container's pacman
+package cache is isolated there too; ISO builds do not read or clear the
+host's system pacman cache. Pass `--no-cache` for an ephemeral cold build.
+
 ## Testing the ISO
 
 Run `./bin/omarchy-iso-boot [release/omarchy.iso]`.
