@@ -20,6 +20,28 @@ Despite the local folder name, the first argument is the Omarchy source checkout
 
 Use `--dev` or `--rc` to build against those package channels. Both `--dev` and `--edge` select the dev packages from the edge mirror.
 
+### AArch64 development builds
+
+AArch64 currently uses the local package closure from the Omarchy and package
+checkouts. Build and validate that closure independently first:
+
+```bash
+./bin/omarchy-iso-make --arch aarch64 --packages-only \
+  --local-source ../omarchy ../omarchy-pkgs
+```
+
+Then build the UEFI-only ISO from the same cache:
+
+```bash
+./bin/omarchy-iso-make --arch aarch64 --no-boot-offer \
+  --local-source ../omarchy ../omarchy-pkgs
+```
+
+The result is written under `release/` with `aarch64` in its filename. Import
+that ISO into an ARM64 UEFI VM in UTM with a VirtIO disk; the live installer
+maps its console onto UTM's VirtIO framebuffer automatically. Build caches are
+isolated by package channel and architecture under `~/.cache/omarchy/`.
+
 ## Autoinstall
 
 The shipped ISO installs itself with no keyboard when it finds its configuration on a second drive. Attach a drive labeled `cidata` alongside the ISO and the installer copies the config off it and skips the configurator; with no such drive, nothing changes and the wizard runs as usual. No rebuild, no extra boot entry.
@@ -84,7 +106,8 @@ Encrypted autoinstalls are not fully unattended — the LUKS passphrase prompt s
 
 ## Testing the ISO
 
-Run `./bin/omarchy-iso-boot [release/omarchy.iso]`.
+For x86_64, run `./bin/omarchy-iso-boot [release/omarchy.iso]`. Import AArch64
+artifacts into an ARM64 UEFI VM in UTM instead.
 
 Run `./test/all` for the fast, VM-free tests under `test/unit/`, which cover cidata autoinstall loading and the orchestrator's phases without needing a built ISO.
 
