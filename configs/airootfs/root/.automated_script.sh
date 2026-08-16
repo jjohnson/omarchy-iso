@@ -12,6 +12,11 @@ set -euo pipefail
 
 [[ $(tty) == /dev/tty1 ]] || exit 0
 
+# UTM's virtio-ramfb display leaves tty1 on the firmware framebuffer after
+# virtio_gpu creates the scanout shown by the viewer. Move the live console to
+# that scanout before drawing the configurator.
+omarchy-live-console-map >/dev/null 2>&1 || true
+
 export OMARCHY_MIRROR="$(cat /root/omarchy_mirror)"
 if [[ -f /root/omarchy_iso_ref ]]; then
   export OMARCHY_ISO_REF="$(cat /root/omarchy_iso_ref)"

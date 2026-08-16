@@ -89,6 +89,33 @@ assert_equal "$profile" \
   "x86_64|bios.syslinux uefi.grub|-comp zstd -Xcompression-level 19 -b 1M -action uncompressed@subpathname(var/cache/omarchy/mirror/offline)" \
   "x86_64 profile behavior remains unchanged"
 
+console_map_tmp="$test_tmp/console-map"
+mkdir -p "$console_map_tmp/sysfs/fb0" "$console_map_tmp/sysfs/fb3"
+printf '%s\n' "EFI VGA" > "$console_map_tmp/sysfs/fb0/name"
+printf '%s\n' "virtio_gpudrmfb" > "$console_map_tmp/sysfs/fb3/name"
+cat > "$console_map_tmp/con2fbmap" <<'MAP'
+#!/bin/bash
+printf '%s\n' "$*" > "$OMARCHY_CONSOLE_MAP_LOG"
+MAP
+chmod +x "$console_map_tmp/con2fbmap"
+OMARCHY_GRAPHICS_SYSFS="$console_map_tmp/sysfs" \
+OMARCHY_CONSOLE_MAP_COMMAND="$console_map_tmp/con2fbmap" \
+OMARCHY_CONSOLE_MAP_LOG="$console_map_tmp/map.log" \
+  "$ROOT/configs/airootfs/usr/local/bin/omarchy-live-console-map"
+assert_equal "$(<"$console_map_tmp/map.log")" "1 3" \
+  "live console follows the VirtIO framebuffer shown by VM viewers"
+
+console_no_map_tmp="$test_tmp/console-no-map"
+mkdir -p "$console_no_map_tmp/sysfs/fb0"
+printf '%s\n' "EFI VGA" > "$console_no_map_tmp/sysfs/fb0/name"
+OMARCHY_GRAPHICS_SYSFS="$console_no_map_tmp/sysfs" \
+OMARCHY_CONSOLE_MAP_COMMAND="$console_map_tmp/con2fbmap" \
+OMARCHY_CONSOLE_MAP_LOG="$console_no_map_tmp/map.log" \
+  "$ROOT/configs/airootfs/usr/local/bin/omarchy-live-console-map"
+[[ ! -e $console_no_map_tmp/map.log ]] ||
+  fail "physical framebuffer unexpectedly triggers VM console mapping"
+pass "physical framebuffer leaves the live console mapping unchanged"
+
 cp "$ROOT/archiso/archiso/mkarchiso" "$test_tmp/mkarchiso"
 patch --silent "$test_tmp/mkarchiso" "$ROOT/builder/mkarchiso-aarch64.patch" ||
   fail "AArch64 compatibility patch applies to pinned Archiso"
@@ -122,3 +149,58 @@ grep -q "^ALL_kver='/boot/vmlinuz-linux-aarch64'$" \
   "$ROOT/configs/airootfs/usr/share/omarchy-iso/linux-aarch64.preset" ||
   fail "Archiso preset uses the staged AArch64 kernel"
 pass "AArch64 live-kernel staging contract is present"
+
+PYTHONDONTWRITEBYTECODE=1 \
+  PYTHONPATH="$ROOT/configs/airootfs/usr/share/omarchy-iso" \
+  python - <<'PY'
+from orchestrator.architecture import (
+    limine_efi_names,
+    limine_linux_boot_assets,
+    node_archive_architecture,
+)
+
+assert limine_efi_names("x86_64") == ("BOOTX64.EFI", "limine_x64.efi")
+assert limine_efi_names("aarch64") == ("BOOTAA64.EFI", "limine_aa64.efi")
+assert node_archive_architecture("x86_64") == "x64"
+assert node_archive_architecture("aarch64") == "arm64"
+
+config = """
+  protocol: linux
+  path: boot():/machine/linux-aarch64/Image#kernelhash
+  module_path: boot():/machine/linux-aarch64/initramfs-linux.img#initramfshash
+"""
+assert limine_linux_boot_assets(config) == {
+    "kernel_path": ["machine/linux-aarch64/Image"],
+    "module_path": ["machine/linux-aarch64/initramfs-linux.img"],
+}
+PY
+pass "target boot and Node assets follow the selected architecture"
+
+source <(
+  sed -n \
+    -e '/^detect_kernel() {/,/^}/p' \
+    -e '/^detect_limine_efi_binary() {/,/^}/p' \
+    -e '/^archinstall_mirror_servers() {/,/^}/p' \
+    "$ROOT/configs/airootfs/root/configurator"
+)
+OMARCHY_ARCH=aarch64
+assert_equal "$(detect_kernel)" "linux-aarch64" \
+  "configurator selects the installed AArch64 kernel"
+assert_equal "$(detect_limine_efi_binary)" "limine_aa64.efi" \
+  "configurator selects the installed AArch64 Limine binary"
+arm_mirrors=$(archinstall_mirror_servers)
+jq -e '
+  length == 2 and
+  all(.[].url; contains("archlinuxarm.org/$arch/$repo"))
+' <<< "[$arm_mirrors]" >/dev/null ||
+  fail "configurator emits only Arch Linux ARM target mirrors"
+pass "configurator emits the Arch Linux ARM target mirrors"
+unset OMARCHY_ARCH
+
+grep -q 'boot_updater = "omarchy-update-kernel-aarch64"' \
+  "$ROOT/configs/airootfs/usr/share/omarchy-iso/orchestrator/phases_impl.py" ||
+  fail "AArch64 installed systems use the native kernel updater"
+grep -q '99-omarchy-aarch64-kernel.hook' \
+  "$ROOT/configs/airootfs/usr/share/omarchy-iso/orchestrator/phases_impl.py" ||
+  fail "AArch64 installed systems validate their future update hook"
+pass "AArch64 target finalization bypasses the x86-only UKI path"

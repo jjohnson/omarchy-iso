@@ -12,12 +12,12 @@ Phase ordering (full-disk and protected/pre-mounted):
                              useradd, runtime Omarchy packages, fstab
     configure_hibernation  → root-owned swap/resume drop-ins
     run_system_finalizer   → arch-chroot root omarchy-apply-system, including Snapper
-    finalize_limine_boot   → final Limine config/UKI build after hardware drop-ins
+    finalize_limine_boot   → final Limine boot build after hardware drop-ins
     run_chroot_finalizer   → arch-chroot -u user omarchy-provision-user
     configure_login        → sddm state + encrypted-install autologin
     configure_ssh_access   → authorized_keys for autoinstall; no-op otherwise
     configure_tailscale    → tailnet join staged for first boot; no-op otherwise
-    validate_boot          → assert UKI / limine.conf / kernel cmdline are sane
+    validate_boot          → assert boot assets / limine.conf / cmdline are sane
 """
 
 from __future__ import annotations
@@ -33,6 +33,12 @@ from dataclasses import replace
 from pathlib import Path
 
 from . import archinstall_adapter as arch
+from .architecture import (
+    limine_efi_names,
+    limine_linux_boot_assets,
+    machine,
+    node_archive_architecture,
+)
 from .context import InstallContext
 from .keyboard import configure_keyboard
 from .ui import error, info
@@ -373,6 +379,7 @@ def _install_limine_omarchy(ctx: InstallContext, installer, config) -> None:
 def _install_pre_mounted_limine(ctx: InstallContext) -> None:
     boot = _boot_intent(ctx)
     storage = _storage_intent(ctx)
+    _, default_efi_binary = limine_efi_names()
     esp_device = storage.get("esp_device")
     if not esp_device:
         raise RuntimeError("omarchy_install.storage.esp_device missing")
@@ -386,7 +393,7 @@ def _install_pre_mounted_limine(ctx: InstallContext) -> None:
         disk=Path(disk),
         part=part,
         esp_path=boot.get("esp_path", "/EFI/limine"),
-        efi_binary=boot.get("efi_binary", "limine_x64.efi"),
+        efi_binary=boot.get("efi_binary", default_efi_binary),
         pre_state=pre_state,
     )
 
@@ -404,15 +411,16 @@ def _install_limine_efi(
     part: int,
     removable: bool = False,
     esp_path: str = "/EFI/limine",
-    efi_binary: str = "limine_x64.efi",
+    efi_binary: str | None = None,
     pre_state: dict | None = None,
 ) -> None:
+    source_name, default_efi_binary = limine_efi_names()
+    efi_binary = efi_binary or default_efi_binary
     if removable:
         esp_path = "/EFI/BOOT"
-        efi_binary = "BOOTX64.EFI"
+        efi_binary = source_name
 
     limine_path = ctx.target / "usr" / "share" / "limine"
-    source_name = "BOOTX64.EFI"
     target_dir = Path(esp_mount) / esp_path.lstrip("/")
     target_path = target_dir / efi_binary
     _copy_required(limine_path / source_name, ctx.target / target_path.relative_to("/"))
@@ -752,9 +760,10 @@ def _runtime_package_list(ctx: InstallContext) -> list[str]:
 
 def _boot_intent(ctx: InstallContext) -> dict:
     boot = dict(ctx.omarchy_install.get("boot") or {})
+    _, default_efi_binary = limine_efi_names()
     boot.setdefault("esp_mount", "/boot")
     boot.setdefault("esp_path", "/EFI/limine")
-    boot.setdefault("efi_binary", "limine_x64.efi")
+    boot.setdefault("efi_binary", default_efi_binary)
     boot.setdefault("enable_fallback", not ctx.is_protected)
     return boot
 
@@ -1212,7 +1221,8 @@ def stage_provisioning_state(ctx: InstallContext) -> None:
 
 
 def _stage_node_tarball(ctx: InstallContext, provisioning_dir) -> None:
-    tarballs = sorted(NODE_PACKAGES_DIR.glob("node-v*-linux-x64.tar.gz"))
+    node_arch = node_archive_architecture()
+    tarballs = sorted(NODE_PACKAGES_DIR.glob(f"node-v*-linux-{node_arch}.tar.gz"))
     if not tarballs:
         # Hard error on every install, not just deferred-provisioning installs: the stash is what lets a
         # later factory reset finalize the next owner offline, and an ISO
@@ -1282,8 +1292,14 @@ def finalize_limine_boot(ctx: InstallContext) -> None:
     """Finalize Limine after target system setup has written all dynamic
     boot drop-ins (hibernation, hardware quirks, protected-mode ESP settings).
     """
-    if not (ctx.target / "usr" / "bin" / "limine-update").exists():
-        raise RuntimeError("/usr/bin/limine-update missing in target")
+    if machine() == "aarch64":
+        boot_updater = "omarchy-update-kernel-aarch64"
+    else:
+        boot_updater = "limine-update"
+
+    updater = ctx.target / "usr" / "bin" / boot_updater
+    if not updater.exists():
+        raise RuntimeError(f"/usr/bin/{boot_updater} missing in target")
 
     default_limine = ctx.target / "etc" / "default" / "limine"
     if not default_limine.exists():
@@ -1313,7 +1329,7 @@ def finalize_limine_boot(ctx: InstallContext) -> None:
     if not limine_conf.exists():
         raise RuntimeError(f"{limine_conf} missing")
 
-    subprocess.run(["arch-chroot", str(ctx.target), "limine-update"], check=True)
+    subprocess.run(["arch-chroot", str(ctx.target), boot_updater], check=True)
 
     subprocess.run(
         ["arch-chroot", str(ctx.target), "btrfs", "quota", "disable", "/"],
@@ -1681,18 +1697,23 @@ def validate_boot(ctx: InstallContext) -> None:
     kernel = storage.get("kernel") or (ctx.user_configuration.get("kernels") or ["linux"])[0]
 
     if arch.has_uefi():
-        limine_binary = esp_mount / boot.get("esp_path", "/EFI/limine").lstrip("/") / boot.get("efi_binary", "limine_x64.efi")
+        _, default_efi_binary = limine_efi_names()
+        limine_binary = esp_mount / boot.get("esp_path", "/EFI/limine").lstrip("/") / boot.get("efi_binary", default_efi_binary)
         if not limine_binary.exists() or limine_binary.stat().st_size == 0:
             raise RuntimeError(f"{limine_binary} missing or empty")
 
-        # Hardware packages (omarchy-hw-intel-ptl, …) can swap the kernel out
-        # from under us mid-install, so trust what's on disk over what we asked
-        # for and only fall back to the configured name when nothing's there.
-        uki_dir = esp_mount / "EFI" / "Linux"
-        candidates = _installed_kernels(ctx) or [kernel]
-        ukis = [uki_dir / f"{uki_prefix}_{name}.efi" for name in candidates]
-        if not any(uki.exists() and uki.stat().st_size for uki in ukis):
-            raise RuntimeError(f"{' / '.join(str(uki) for uki in ukis)} missing or empty")
+        if machine() == "aarch64":
+            _validate_aarch64_limine_entry(ctx, esp_mount, limine_conf_text)
+        else:
+            # Hardware packages (omarchy-hw-intel-ptl, …) can swap the kernel
+            # out from under us mid-install, so trust what's on disk over what
+            # we asked for and only fall back to the configured name when
+            # nothing's there.
+            uki_dir = esp_mount / "EFI" / "Linux"
+            candidates = _installed_kernels(ctx) or [kernel]
+            ukis = [uki_dir / f"{uki_prefix}_{name}.efi" for name in candidates]
+            if not any(uki.exists() and uki.stat().st_size for uki in ukis):
+                raise RuntimeError(f"{' / '.join(str(uki) for uki in ukis)} missing or empty")
 
         post = _read_efibootmgr()
         if not _find_label_entries(post["entries"], "Limine"):
@@ -1703,6 +1724,32 @@ def validate_boot(ctx: InstallContext) -> None:
 
     if ctx.defer_provisioning:
         _validate_provisioning_state(ctx)
+
+
+def _validate_aarch64_limine_entry(
+    ctx: InstallContext,
+    esp_mount: Path,
+    limine_conf_text: str,
+) -> None:
+    assets = limine_linux_boot_assets(limine_conf_text)
+    for key in ("kernel_path", "module_path"):
+        paths = assets.get(key, [])
+        if not paths:
+            raise RuntimeError(f"AArch64 Limine entry has no {key}")
+        if not any(
+            (esp_mount / path).is_file() and (esp_mount / path).stat().st_size
+            for path in paths
+        ):
+            locations = " / ".join(str(esp_mount / path) for path in paths)
+            raise RuntimeError(f"{locations} missing or empty")
+
+    hook = ctx.target / "etc/pacman.d/hooks/99-omarchy-aarch64-kernel.hook"
+    if not hook.is_file():
+        raise RuntimeError(
+            f"{hook} missing — future AArch64 kernel updates would not rebuild Limine"
+        )
+    if "Exec = /usr/bin/omarchy-update-kernel-aarch64" not in hook.read_text():
+        raise RuntimeError(f"{hook} does not call the AArch64 kernel updater")
 
 
 def _validate_provisioning_state(ctx: InstallContext) -> None:
@@ -1731,7 +1778,7 @@ def _validate_provisioning_state(ctx: InstallContext) -> None:
 
 
 def _assert_boot_hooks_restored(ctx: InstallContext) -> None:
-    """Never hand over a system whose UKI rebuild hook is still masked.
+    """Never hand over a system whose boot-image rebuild hook is still masked.
 
     run_system_finalizer defers 90-mkinitcpio-install.hook inside the target and
     restores it in a finally, but a mask that survived would be invisible until
@@ -1751,7 +1798,7 @@ def _assert_boot_hooks_restored(ctx: InstallContext) -> None:
         # package, so the real hook is on disk before the mask ever goes up and
         # must be on disk again now.
         if not path.is_file():
-            raise RuntimeError(f"{path} is missing — future kernel updates would ship no UKI")
+            raise RuntimeError(f"{path} is missing — future kernel updates would ship no boot image")
 
 
 # Every kernel package leaves its pkgbase next to its modules, which is also
