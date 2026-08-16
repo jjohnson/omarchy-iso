@@ -67,27 +67,49 @@ if [[ $OMARCHY_ARCH == "aarch64" ]]; then
 fi
 
 ONLINE_PACMAN_CONF=$(omarchy_iso_online_pacman_config "$OMARCHY_ARCH" "$OMARCHY_MIRROR")
+if [[ $OMARCHY_ARCH == "aarch64" && -d /omarchy-source && -d /omarchy-pkgs ]]; then
+  # Local-source AArch64 builds must not contact the unpublished Omarchy repo.
+  awk '/^\[omarchy\]$/{exit} {print}' "$ONLINE_PACMAN_CONF" \
+    > /tmp/pacman-online-aarch64-local.conf
+  ONLINE_PACMAN_CONF=/tmp/pacman-online-aarch64-local.conf
+fi
+
+# Build locations. Build-only artifacts live outside the runtime mirror but in
+# the same persistent, architecture-scoped host cache.
+build_cache_dir=/var/cache
+offline_mirror_dir="$build_cache_dir/airootfs/var/cache/omarchy/mirror/offline"
+build_dependency_cache_dir="$build_cache_dir/airootfs/var/cache/omarchy/build-dependencies"
+mkdir -p "$build_cache_dir" "$offline_mirror_dir" "$build_dependency_cache_dir"
 
 # Pre-import the omarchy signing key (so pacman trusts our [omarchy] repo
 # during the build without keyserver lookups).
 pacman-key --add /builder/omarchy.gpg
 pacman-key --lsign-key 40DFB630FF42BCFFB047046CF0134EE680CAC571
 
-# omarchy-keyring is needed inside the offline mirror too.
-pacman --config "$ONLINE_PACMAN_CONF" --noconfirm -Sy omarchy-keyring
+# omarchy-keyring is needed inside the offline mirror too. Build the complete
+# local closure first on AArch64 so this path does not depend on publication.
+if [[ $OMARCHY_ARCH == "aarch64" && -d /omarchy-source && -d /omarchy-pkgs ]]; then
+  bash /builder/build-omarchy-packages.sh \
+    "$offline_mirror_dir" "$build_dependency_cache_dir"
+  LOCAL_OMARCHY_BUILD=1
+  omarchy_keyring_package=$(find "$offline_mirror_dir" -maxdepth 1 -type f \
+    -name 'omarchy-keyring-*.pkg.tar.*' ! -name '*.sig' | sort | tail -1)
+  if [[ -z $omarchy_keyring_package ]]; then
+    echo "ERROR: local omarchy-keyring package was not built" >&2
+    exit 1
+  fi
+  pacman --noconfirm -U "$omarchy_keyring_package"
+else
+  pacman --config "$ONLINE_PACMAN_CONF" --noconfirm -Sy omarchy-keyring
+fi
 pacman-key --populate omarchy
 
 # Append the [omarchy] repo to the container's /etc/pacman.conf so subsequent
 # tools (notably makepkg in build-omarchy-packages.sh) can resolve omarchy-
 # only build deps like limine-snapper-sync and limine-mkinitcpio-hook.
-if ! grep -q '^\[omarchy\]' /etc/pacman.conf; then
+if [[ -z ${LOCAL_OMARCHY_BUILD:-} ]] && ! grep -q '^\[omarchy\]' /etc/pacman.conf; then
   awk '/^\[omarchy\]/,/^$/' "$ONLINE_PACMAN_CONF" >> /etc/pacman.conf
 fi
-
-# Build locations
-build_cache_dir=/var/cache
-offline_mirror_dir="$build_cache_dir/airootfs/var/cache/omarchy/mirror/offline"
-mkdir -p "$build_cache_dir" "$offline_mirror_dir"
 
 # Seed from the official Arch releng profile.
 cp -r /archiso/configs/releng/* "$build_cache_dir/"
@@ -151,6 +173,7 @@ if [[ ${OMARCHY_INSTALL_DEBUG:-} == "1" ]]; then
   {
     echo "debug=1"
     echo "built_at=$(date -Is)"
+    echo "architecture=$OMARCHY_ARCH"
     echo "ref=$OMARCHY_ISO_REF"
     echo "mirror=$OMARCHY_MIRROR"
     echo "runtime_package=$OMARCHY_RUNTIME_PACKAGE"
@@ -172,9 +195,25 @@ fi
 # When --local-source is in effect, build omarchy* from the mounted source
 # trees and drop them in the offline mirror. Otherwise pacman -Syw below
 # downloads the published versions from the omarchy network mirror.
-if [[ -d /omarchy-source && -d /omarchy-pkgs ]]; then
-  bash /builder/build-omarchy-packages.sh "$offline_mirror_dir"
+if [[ -d /omarchy-source && -d /omarchy-pkgs && -z ${LOCAL_OMARCHY_BUILD:-} ]]; then
+  bash /builder/build-omarchy-packages.sh \
+    "$offline_mirror_dir" "$build_dependency_cache_dir"
   LOCAL_OMARCHY_BUILD=1
+fi
+
+DOWNLOAD_PACMAN_CONF="$ONLINE_PACMAN_CONF"
+if [[ -n ${LOCAL_OMARCHY_BUILD:-} ]]; then
+  DOWNLOAD_PACMAN_CONF=/tmp/pacman-online-with-local.conf
+  awk -v mirror="$offline_mirror_dir" '
+    /^\[core\]$/ && !added {
+      print "[omarchy-local]"
+      print "SigLevel = Never"
+      print "Server = file://" mirror
+      print ""
+      added=1
+    }
+    { print }
+  ' "$ONLINE_PACMAN_CONF" > "$DOWNLOAD_PACMAN_CONF"
 fi
 
 # Node.js binary for offline mise install.
@@ -297,22 +336,9 @@ mapfile -t all_packages < <(
   } | sort -u
 )
 
-# With --local-source we already built these omarchy* packages directly into
-# the mirror; strip them from the pacman -Syw list so it doesn't try to fetch
-# the published versions on top.
-if [[ -n ${LOCAL_OMARCHY_BUILD:-} ]]; then
-  mapfile -t all_packages < <(
-    printf '%s\n' "${all_packages[@]}" |
-      grep -Fxv \
-        -e "$OMARCHY_RUNTIME_PACKAGE" \
-        -e "$OMARCHY_SETTINGS_PACKAGE" \
-        -e "$OMARCHY_NVIM_PACKAGE" || true
-  )
-fi
-
 mkdir -p /tmp/offlinedb
 download_offline_packages() {
-  pacman --config "$ONLINE_PACMAN_CONF" --noconfirm -Syw \
+  pacman --config "$DOWNLOAD_PACMAN_CONF" --noconfirm -Syw \
     "${all_packages[@]}" --cachedir "$offline_mirror_dir/" --dbpath /tmp/offlinedb --needed
 }
 
@@ -330,7 +356,7 @@ fi
 # newest version of every cached package name) removes packages that have left
 # the lists or dependency closure, such as an old Electron major version.
 if ! resolved_package_files="$(
-  pacman --config "$ONLINE_PACMAN_CONF" --noconfirm \
+  pacman --config "$DOWNLOAD_PACMAN_CONF" --noconfirm \
     --dbpath /tmp/offlinedb -S --print --print-format '%f' "${all_packages[@]}"
 )"; then
   echo "ERROR: could not resolve the package files required by the offline mirror" >&2
@@ -338,37 +364,15 @@ if ! resolved_package_files="$(
 fi
 mapfile -t required_package_files <<< "$resolved_package_files"
 
-# The online transaction intentionally excludes packages built from the local
-# checkouts. Add those exact artifacts back to the keep-set after verifying
-# that the local build left exactly one file for each selected package name.
-if [[ -n ${LOCAL_OMARCHY_BUILD:-} ]]; then
-  for local_package_name in \
-    "$OMARCHY_RUNTIME_PACKAGE" "$OMARCHY_SETTINGS_PACKAGE" "$OMARCHY_NVIM_PACKAGE"; do
-    local_package_file=""
-    for candidate in "$offline_mirror_dir/$local_package_name-"*.pkg.tar.*; do
-      [[ -f $candidate && $candidate != *.sig ]] || continue
-      read -r candidate_name _ < <(pacman -Qp "$candidate" 2>/dev/null) || continue
-      [[ $candidate_name == "$local_package_name" ]] || continue
-      if [[ -n $local_package_file ]]; then
-        echo "ERROR: multiple local builds found for $local_package_name" >&2
-        exit 1
-      fi
-      local_package_file="${candidate##*/}"
-    done
-    if [[ -z $local_package_file ]]; then
-      echo "ERROR: local build not found for $local_package_name" >&2
-      exit 1
-    fi
-    required_package_files+=("$local_package_file")
-  done
-fi
-
 printf '%s\n' "${required_package_files[@]}" |
   bash /builder/prune-offline-mirror.sh "$offline_mirror_dir"
 
 # Rebuild the offline repo db from scratch so size/checksum/depends entries
 # always reflect only the package files selected for this build.
-rm -f "$offline_mirror_dir"/offline.db* "$offline_mirror_dir"/offline.files*
+rm -f "$offline_mirror_dir"/omarchy-local.db* \
+  "$offline_mirror_dir"/omarchy-local.files* \
+  "$offline_mirror_dir"/offline.db* \
+  "$offline_mirror_dir"/offline.files*
 mapfile -t offline_package_files < <(
   find "$offline_mirror_dir" -maxdepth 1 -type f \
     -name '*.pkg.tar.*' ! -name '*.sig' -print | sort
@@ -446,6 +450,11 @@ else
   printf '%s\n' "$expected_packages" \
     >"$build_cache_dir/airootfs/usr/share/omarchy-iso/expected-packages"
   echo "Target install resolves to $expected_packages packages."
+fi
+
+if [[ ${OMARCHY_PACKAGES_ONLY:-} == "1" ]]; then
+  echo "Package-only build complete; offline $OMARCHY_ARCH closure resolves."
+  exit 0
 fi
 
 # Live ISO uses the same offline pacman.conf.

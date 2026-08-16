@@ -1,0 +1,34 @@
+# Fresh-image target          Source package base          Dependency mode
+# "-" is build-only. @...@ tokens select the ISO's stable/dev package names.
+-                             gradle                       syncdeps
+omarchy-keyring               omarchy-keyring              nodeps
+dotnet-runtime                dotnet-sdk-bin               syncdeps
+aether                        aether                       syncdeps
+asdcontrol                    asdcontrol                   syncdeps
+cliamp                        cliamp                       syncdeps
+herdr                         herdr                        syncdeps
+hyprland-preview-share-picker hyprland-preview-share-picker syncdeps
+limine-mkinitcpio-hook        limine-mkinitcpio-hook       syncdeps
+limine-snapper-sync           limine-snapper-sync          syncdeps
+localsend                     localsend                    syncdeps
+mise                          mise-bin                     syncdeps
+obs-studio                    obs-studio                   syncdeps
+obsidian                      obsidian-appimage            syncdeps
+omacalc                       omacalc                      syncdeps
+omacut                        omacut                       syncdeps
+@nvim@                        @nvim@                       nodeps
+@settings@                    @settings@                   nodeps
+omawrite                      omawrite                     syncdeps
+pinta                         pinta                        syncdeps
+quickshell-git                quickshell-git               syncdeps
+tensaku                       tensaku                      syncdeps
+tobi-try                      tobi-try                     syncdeps
+ttf-ia-writer                 ttf-ia-writer                syncdeps
+ttf-jetbrains-mono-nerd-basic ttf-jetbrains-mono-nerd-basic syncdeps
+ttfx                          ttfx                         syncdeps
+tzupdate                      tzupdate                     syncdeps
+ufw-docker                    ufw-docker                   syncdeps
+xdg-terminal-exec             xdg-terminal-exec            syncdeps
+yaru-icon-theme               yaru-icon-theme              syncdeps
+yay                           yay                          syncdeps
+@runtime@                     @runtime@                    nodeps

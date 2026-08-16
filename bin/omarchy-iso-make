@@ -3,6 +3,7 @@
 set -e
 
 NO_CACHE=""
+PACKAGES_ONLY=""
 LOCAL_OMARCHY_PATH=""
 LOCAL_PKGS_PATH=""
 OMARCHY_ARCH=x86_64
@@ -25,6 +26,11 @@ while [[ $# -gt 0 ]]; do
     shift
     ;;
   --no-boot-offer)
+    NO_BOOT_OFFER=1
+    shift
+    ;;
+  --packages-only)
+    PACKAGES_ONLY=1
     NO_BOOT_OFFER=1
     shift
     ;;
@@ -65,7 +71,7 @@ while [[ $# -gt 0 ]]; do
     ;;
   *)
     echo "Unknown option: $1"
-    echo "Usage: $0 [--arch x86_64|aarch64] [--no-cache] [--keep-pkg-cache] [--no-boot-offer] [--debug] [--edge] [--dev|--rc] [--local-source <omarchy-checkout> <pkgs-checkout>]"
+    echo "Usage: $0 [--arch x86_64|aarch64] [--no-cache] [--keep-pkg-cache] [--no-boot-offer] [--packages-only] [--debug] [--edge] [--dev|--rc] [--local-source <omarchy-checkout> <pkgs-checkout>]"
     exit 1
     ;;
   esac
@@ -139,6 +145,7 @@ DOCKER_ARGS=(
   -e "OMARCHY_ISO_REF=$OMARCHY_ISO_REF"
   -e "OMARCHY_MIRROR=$OMARCHY_MIRROR"
   -e "OMARCHY_ARCH=$OMARCHY_ARCH"
+  -e "OMARCHY_PACKAGES_ONLY=$PACKAGES_ONLY"
   -e "OMARCHY_INSTALL_DEBUG=${OMARCHY_INSTALL_DEBUG:-}"
   -e "HOST_UID=$(id -u)"
   -e "HOST_GID=$(id -g)"
@@ -154,6 +161,18 @@ if [[ -n $LOCAL_OMARCHY_PATH ]]; then
     -v "$LOCAL_OMARCHY_PATH:/omarchy-source:ro"
     -v "$LOCAL_PKGS_PATH:/omarchy-pkgs:ro"
   )
+
+  # Linked worktrees store a .git pointer to their repository's common Git
+  # directory outside the mounted checkout. Preserve that read-only path in
+  # the container so package pkgver() functions can inspect local history.
+  for local_checkout in "$LOCAL_OMARCHY_PATH" "$LOCAL_PKGS_PATH"; do
+    if [[ -f $local_checkout/.git ]]; then
+      git_common_dir=$(
+        git -C "$local_checkout" rev-parse --path-format=absolute --git-common-dir
+      )
+      DOCKER_ARGS+=(-v "$git_common_dir:$git_common_dir:ro")
+    fi
+  done
 fi
 
 # Mount the build cache directory where packages are downloaded. Channels use
@@ -173,11 +192,18 @@ fi
 
 docker run "${DOCKER_ARGS[@]}" "$(omarchy_iso_docker_image "$OMARCHY_ARCH")" /$BUILD_SCRIPT
 
+if [[ -n $PACKAGES_ONLY ]]; then
+  exit 0
+fi
+
 latest_iso=$(\ls -t "$BUILD_RELEASE_PATH"/*-"$OMARCHY_ARCH".iso | head -n1)
 iso_ref="${latest_iso%.*}-$OMARCHY_ISO_REF.iso"
 mv -f "$latest_iso" "$iso_ref"
 
-if [[ -z "${NO_BOOT_OFFER:-}" ]]; then
+if [[ -z "${NO_BOOT_OFFER:-}" && $OMARCHY_ARCH == "x86_64" ]]; then
   echo
   gum confirm "Boot $iso_ref?" && "$BUILD_ROOT/bin/omarchy-iso-boot" "$iso_ref"
+elif [[ -z "${NO_BOOT_OFFER:-}" ]]; then
+  echo
+  echo "AArch64 ISO ready at $iso_ref; import it into an ARM64 UEFI VM in UTM."
 fi
