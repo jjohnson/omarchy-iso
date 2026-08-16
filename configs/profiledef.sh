@@ -8,8 +8,15 @@ iso_application="Omarchy Installer"
 iso_version="$(date --date="@${SOURCE_DATE_EPOCH:-$(date +%s)}" +%Y.%m.%d)"
 install_dir="arch"
 buildmodes=('iso')
-bootmodes=('bios.syslinux' 'uefi.grub')
-arch="x86_64"
+arch="${OMARCHY_ARCH:-x86_64}"
+case "$arch" in
+  x86_64) bootmodes=('bios.syslinux' 'uefi.grub') ;;
+  aarch64) bootmodes=('uefi.grub') ;;
+  *)
+    echo "Error: unsupported ISO architecture '$arch'" >&2
+    return 1
+    ;;
+esac
 pacman_conf="pacman-offline.conf"
 airootfs_image_type="squashfs"
 # Package archives in the offline mirror are already zstd-compressed. Storing
@@ -22,12 +29,21 @@ airootfs_image_type="squashfs"
 # cold on every boot: kernel, plymouth, systemd, python, archinstall, gum. The
 # whole ISO grows well under a percent for it, and dropping the x86 BCJ filter
 # also removes one of the blockers listed in plans/aarch64-support.md.
-airootfs_image_tool_options=(
-  '-comp' 'zstd'
-  '-Xcompression-level' '19'
-  '-b' '1M'
-  '-action' 'uncompressed@subpathname(var/cache/omarchy/mirror/offline)'
-)
+if [[ $arch == "aarch64" ]]; then
+  # Arch Linux ARM's linux-aarch64 kernel omits CONFIG_SQUASHFS_ZSTD.
+  airootfs_image_tool_options=(
+    '-comp' 'xz'
+    '-b' '1M'
+    '-action' 'uncompressed@subpathname(var/cache/omarchy/mirror/offline)'
+  )
+else
+  airootfs_image_tool_options=(
+    '-comp' 'zstd'
+    '-Xcompression-level' '19'
+    '-b' '1M'
+    '-action' 'uncompressed@subpathname(var/cache/omarchy/mirror/offline)'
+  )
+fi
 bootstrap_tarball_compression=('zstd' '-c' '-T0' '--auto-threads=logical' '--long' '-19')
 file_permissions=(
   ["/etc/shadow"]="0:0:400"
@@ -43,3 +59,7 @@ file_permissions=(
   ["/usr/local/bin/omarchy-upload-log"]="0:0:755"
   ["/var/cache/omarchy/mirror/offline/"]="0:0:775"
 )
+
+if [[ $arch == "aarch64" ]]; then
+  file_permissions["/usr/local/bin/omarchy-iso-stage-aarch64-kernel"]="0:0:755"
+fi

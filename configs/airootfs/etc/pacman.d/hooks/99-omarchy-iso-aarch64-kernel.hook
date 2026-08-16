@@ -1,0 +1,13 @@
+# remove from airootfs!
+# This build-only hook is deleted by Archiso's custom-hook cleanup.
+
+[Trigger]
+Type = Package
+Operation = Install
+Operation = Upgrade
+Target = linux-aarch64
+
+[Action]
+Description = Staging the Arch Linux ARM kernel for Archiso...
+When = PostTransaction
+Exec = /usr/local/bin/omarchy-iso-stage-aarch64-kernel

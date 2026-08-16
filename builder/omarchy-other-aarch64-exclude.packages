@@ -1,0 +1,26 @@
+# Optional x86 hardware packages that must not enter the AArch64 mirror.
+apple-bcm-firmware
+apple-t2-audio-config
+asusctl
+broadcom-wl
+dell-xps-touchpad-haptics
+intel-ipu7-camera
+intel-lpmd
+intel-media-driver
+lib32-nvidia-580xx-utils
+lib32-nvidia-utils
+libva-intel-driver
+linux-ptl
+linux-ptl-headers
+linux-t2
+linux-t2-headers
+macbook12-spi-driver-dkms
+nvidia-580xx-dkms
+nvidia-580xx-utils
+qmk-hid
+t2fanrd
+thermald
+tuxedo-drivers-nocompatcheck-dkms
+vpl-gpu-rt
+yay-debug
+yt6801-dkms

@@ -1,0 +1,7 @@
+# Archiso preset for Arch Linux ARM's /boot/Image kernel layout.
+
+PRESETS=('archiso')
+
+ALL_kver='/boot/vmlinuz-linux-aarch64'
+archiso_config='/etc/mkinitcpio.conf.d/archiso.conf'
+archiso_image='/boot/initramfs-linux-aarch64.img'
